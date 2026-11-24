@@ -1,0 +1,372 @@
+package no.webeasy.app
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
+import androidx.webkit.WebViewAssetLoader
+import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.net.URLConnection
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.util.UUID
+import java.util.concurrent.Executors
+
+class MainActivity : ComponentActivity() {
+    private val worker = Executors.newSingleThreadExecutor()
+    private val storeDelegate = lazy { ContentStore(this) }
+    private val store by storeDelegate
+    private lateinit var generator: WebView
+    private var project by mutableStateOf<JSONObject?>(null)
+    private var catalog by mutableStateOf<JSONObject?>(null)
+    private var revision by mutableIntStateOf(0)
+    private var status by mutableStateOf("Opening local SQLite project...")
+    private var ready by mutableStateOf(false)
+    private var busy by mutableStateOf(false)
+    private var tab by mutableIntStateOf(0)
+    private val screens = mutableStateListOf<Screen>()
+    private var pendingMedia: PendingMedia? = null
+
+    private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null)
+    private data class PendingMedia(val id: String, val kind: String, val view: WebView)
+
+    private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val pending = pendingMedia ?: return@registerForActivityResult
+        pendingMedia = null
+        if (uri == null) { respond(pending.view, pending.id); return@registerForActivityResult }
+        worker.execute {
+            runCatching {
+                val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                    if (it.moveToFirst()) it.getString(0) else "media"
+                } ?: "media"
+                val type = contentResolver.getType(uri) ?: URLConnection.guessContentTypeFromName(name) ?: ""
+                require(type.startsWith("${pending.kind}/"))
+                store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name)
+            }.fold(onSuccess = { media ->
+                runOnUiThread {
+                    project?.getJSONArray("media")?.put(media)
+                    respond(pending.view, pending.id, media)
+                }
+            }, onFailure = { respond(pending.view, pending.id, error = it.message ?: "Cannot import media.") })
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        generator = localWebView().apply {
+            webViewClient = client(loader(), onFinished = { ready = true })
+            loadUrl("$base/assets/website/generator.html")
+        }
+        worker.execute {
+            runCatching {
+                store.project() to JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
+            }.fold(onSuccess = { (content, examples) -> runOnUiThread {
+                project = content; catalog = examples; status = "Local SQLite. Save changes before closing."
+            } }, onFailure = { runOnUiThread { status = it.message ?: "Cannot open local storage." } })
+        }
+        setContent {
+            MaterialTheme {
+                BackHandler(enabled = screens.isNotEmpty()) { back() }
+                Scaffold(topBar = {
+                    TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy") },
+                        navigationIcon = { if (screens.isNotEmpty()) TextButton(onClick = ::back) { Text(getString(R.string.back)) } },
+                        actions = {
+                            TextButton(onClick = { generate(false) }, enabled = ready && !busy && project != null) { Text("Save") }
+                            TextButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null) { Text("Export") }
+                        })
+                }) { padding ->
+                    Column(Modifier.fillMaxSize().padding(padding)) {
+                        Text(status, Modifier.padding(16.dp))
+                        val screen = screens.lastOrNull()
+                        when {
+                            screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
+                            screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
+                            else -> RootList(revision)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun changed() { revision += 1; status = "Unsaved changes." }
+    private fun back() { screens.removeAt(screens.lastIndex).directory?.deleteRecursively() }
+    private fun JSONArray.records() = List(length()) { getJSONObject(it) }
+    private fun array(record: JSONObject, key: String): JSONArray = record.optJSONArray(key) ?: JSONArray().also { record.put(key, it) }
+
+    private fun create(kind: String, siblings: JSONArray): JSONObject {
+        val prefix = if (kind == "news") "news" else "page"
+        var index = siblings.length() + 1
+        while (siblings.records().any { it.optString("slug") == "$prefix-$index" }) index += 1
+        return JSONObject().put("id", UUID.randomUUID().toString()).put("title", "New $prefix").put("menuTitle", "New page")
+            .put("slug", "$prefix-$index").put("date", LocalDate.now().toString()).put("heading", if (kind == "section") "New section" else "")
+            .put("content", "<p></p>").put("shortContent", "<p></p>").put("sections", JSONArray()).put("asides", JSONArray()).put("children", JSONArray())
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
+        ScrollableTabRow(selectedTabIndex = tab) {
+            listOf("Pages", "News", "Templates", "Building blocks").forEachIndexed { index, name ->
+                Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
+            }
+        }
+        val source = if (tab < 2) project else catalog
+        val key = listOf("pages", "news", "templates", "components")[tab]
+        val records = source?.optJSONArray(key)?.records() ?: emptyList()
+        LazyColumn {
+            if (tab == 1) item { TextButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
+            items(records.size, key = { records[it].getString("id") }) { index ->
+                val record = records[index]
+                if (tab < 2) RowEntry(record, source!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
+                else ListItem(headlineContent = { Text(record.getString("title")) },
+                    supportingContent = { Text(record.getString("description")) },
+                    modifier = Modifier.clickable { screens.add(Screen("preview", url = "$base/assets/website/${record.getString("preview")}")) })
+            }
+            if (tab < 2 && source != null) item {
+                TextButton(onClick = {
+                    val kind = if (tab == 0) "page" else "news"
+                    val collection = source.getJSONArray(key)
+                    val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
+                }) { Text(if (tab == 0) "Add page" else "Add news") }
+            }
+        }
+    }
+
+    @Composable
+    private fun RowEntry(record: JSONObject, collection: JSONArray, index: Int, kind: String) {
+        Column {
+            ListItem(headlineContent = { Text(if (kind == "page") record.optString("menuTitle", "Page")
+                else record.optString("title").ifEmpty { record.optString("heading").ifEmpty { "Aside" } }) },
+                modifier = Modifier.clickable { screens.add(Screen(kind, record)) })
+            Row {
+                TextButton(onClick = { collection.remove(index); changed() }) { Text("Remove") }
+                TextButton(onClick = {
+                    if (index > 0) {
+                        val previous = collection.getJSONObject(index - 1)
+                        collection.put(index - 1, record); collection.put(index, previous); changed()
+                    }
+                }, enabled = index > 0) { Text("Move up") }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun RecordForm(screen: Screen, @Suppress("UNUSED_PARAMETER") revision: Int) {
+        val record = screen.record!!
+        var dateDialog by remember(record.getString("id")) { mutableStateOf(false) }
+        LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (screen.kind in listOf("page", "news")) {
+                item { NativeText(record, "title", "Title") }
+                if (screen.kind == "page") item { NativeText(record, "menuTitle", "Menu title") }
+                item { NativeText(record, "slug", "Slug") }
+                item { TextButton(onClick = { dateDialog = true }) { Text("Date: ${record.getString("date")}") } }
+            } else item { NativeText(record, "heading", if (screen.kind == "aside") "Heading (optional)" else "Heading") }
+            item {
+                Text(if (screen.kind == "news") "Short content" else "Content")
+                RichField(record, if (screen.kind == "news") "shortContent" else "content")
+            }
+            val related = buildList {
+                if (screen.kind in listOf("page", "news")) add(Triple("sections", "Sections", "section"))
+                if (screen.kind != "aside") add(Triple("asides", "Asides", "aside"))
+                if (screen.kind == "page") add(Triple("children", "Subpages", "page"))
+            }
+            related.forEach { (key, label, kind) ->
+                item { Text(label, style = MaterialTheme.typography.titleMedium) }
+                val collection = array(record, key)
+                items(collection.length(), key = { "$key-${collection.getJSONObject(it).getString("id")}" }) { index ->
+                    RowEntry(collection.getJSONObject(index), collection, index, kind)
+                }
+                item { TextButton(onClick = {
+                    val child = create(kind, collection); collection.put(child); changed(); screens.add(Screen(kind, child))
+                }) { Text("Add ${if (key == "children") "subpage" else kind}") } }
+            }
+            if (screen.kind in listOf("page", "news")) item {
+                TextButton(onClick = { generate(true, path = if (screen.kind == "news")
+                    "news/${record.getString("date")}/${record.getString("slug")}/index.html" else pagePath(record.getString("id"))) }) { Text("Preview") }
+            }
+        }
+        if (dateDialog) {
+            val dateState = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(record.getString("date")).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
+            DatePickerDialog(onDismissRequest = { dateDialog = false },
+                confirmButton = { TextButton(onClick = {
+                    dateState.selectedDateMillis?.let { record.put("date", Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()); changed() }
+                    dateDialog = false
+                }) { Text("Select") } },
+                dismissButton = { TextButton(onClick = { dateDialog = false }) { Text("Cancel") } }) { DatePicker(state = dateState) }
+        }
+    }
+
+    @Composable
+    private fun NativeText(record: JSONObject, key: String, label: String) {
+        OutlinedTextField(value = record.optString(key), onValueChange = { record.put(key, it); changed() },
+            label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(capitalization = if (key == "slug") KeyboardCapitalization.None else KeyboardCapitalization.Sentences))
+    }
+
+    private fun pagePath(id: String): String? {
+        fun find(pages: JSONArray, prefix: String): String? {
+            for (page in pages.records()) {
+                val route = "$prefix${page.getString("slug")}/"
+                if (page.getString("id") == id) return route + "index.html"
+                find(array(page, "children"), route)?.let { return it }
+            }
+            return null
+        }
+        return project?.getJSONArray("pages")?.let { find(it, "") }
+    }
+
+    private fun generate(compile: Boolean, path: String? = null, export: Boolean = false) {
+        if (busy || !ready || project == null) return
+        busy = true
+        val savedRevision = revision
+        val input = if (compile) JSONObject().put("project", project).put("catalog", catalog) else project!!
+        generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "compile" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
+            val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }
+            if (output.isFailure || output.getOrNull()?.has("error") == true) {
+                status = output.getOrNull()?.optString("error") ?: "Cannot generate content."; busy = false
+                return@evaluateJavascript
+            }
+            val result = output.getOrThrow()
+            worker.execute {
+                runCatching {
+                    if (!compile || export) store.save(result.getJSONObject("project"))
+                    if (!compile) null else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                    else store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                }.fold(onSuccess = { file -> runOnUiThread {
+                    busy = false
+                    if (!compile) status = if (savedRevision == revision) "Saved locally to SQLite." else "More recent changes remain unsaved."
+                    else if (export && file != null) {
+                        val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
+                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                            type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }, getString(R.string.share_website)))
+                        status = "Website snapshot ready to share."
+                    } else if (file != null) screens.add(Screen("preview", url = "$base/preview/${path ?: "index.html"}", directory = file))
+                } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "The operation failed." } })
+            }
+        }
+    }
+
+    @Composable
+    private fun RichField(record: JSONObject, key: String) {
+        var height by remember(record.getString("id"), key) { mutableStateOf(400f) }
+        AndroidView(modifier = Modifier.fillMaxWidth().height(height.dp), factory = {
+            localWebView().apply {
+                val bridge = FieldBridge(this, record, key) { height = it }
+                tag = bridge
+                addJavascriptInterface(bridge, "WebeasyNative")
+                loadUrl("$base/assets/website/field.html")
+            }
+        }, update = { view ->
+            val bridge = view.tag as FieldBridge
+            if (bridge.ready && bridge.value != record.optString(key)) bridge.pushValue(record.optString(key))
+        }, onRelease = { it.removeJavascriptInterface("WebeasyNative"); it.destroy() })
+    }
+
+    private inner class FieldBridge(val view: WebView, val record: JSONObject, val key: String, val resize: (Float) -> Unit) {
+        var ready = false
+        var value = ""
+        fun pushValue(content: String) { value = content; view.evaluateJavascript("window.WebeasyField.setValue(${JSONObject.quote(content)});", null) }
+        @JavascriptInterface fun request(serialized: String) {
+            val message = runCatching { JSONObject(serialized) }.getOrNull() ?: return
+            runOnUiThread {
+                val id = message.optString("id")
+                val payload = message.optJSONObject("payload") ?: JSONObject()
+                when (message.optString("method")) {
+                    "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id) }
+                    "change" -> { value = payload.getString("content"); record.put(key, value); changed(); respond(view, id) }
+                    "resize" -> { val height = payload.optDouble("height"); if (height.isFinite()) resize(maxOf(200f, height.toFloat())); respond(view, id) }
+                    "pickMedia" -> {
+                        val kind = payload.optString("kind")
+                        if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
+                        else {
+                            pendingMedia = PendingMedia(id, kind, view)
+                            mediaPicker.launch(PickVisualMediaRequest(if (kind == "image") ActivityResultContracts.PickVisualMedia.ImageOnly else ActivityResultContracts.PickVisualMedia.VideoOnly))
+                        }
+                    }
+                    else -> respond(view, id, error = "Unknown content-field operation.")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun Preview(screen: Screen) {
+        AndroidView(modifier = Modifier.fillMaxSize(), factory = {
+            localWebView().apply {
+                webViewClient = client(loader(screen.directory))
+                loadUrl(screen.url!!)
+            }
+        }, onRelease = { it.destroy() })
+    }
+
+    private fun local(uri: Uri) = uri.scheme == "https" && uri.host == "appassets.androidplatform.net"
+    private fun denied() = WebResourceResponse("text/plain", "utf-8", 404, "Not found", emptyMap(), ByteArrayInputStream(byteArrayOf()))
+    private fun loader(preview: File? = null): WebViewAssetLoader {
+        val builder = WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/media/") { path -> runCatching {
+                WebResourceResponse(URLConnection.guessContentTypeFromName(path) ?: "application/octet-stream", null,
+                    ContentStore.safeFile(File(filesDir, "Media"), path).inputStream())
+            }.getOrElse { denied() } }
+        if (preview != null) builder.addPathHandler("/preview/", WebViewAssetLoader.InternalStoragePathHandler(this, preview))
+        return builder.build()
+    }
+    private fun client(loader: WebViewAssetLoader, onFinished: () -> Unit = {}) = object : WebViewClient() {
+        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
+            if (!local(request.url)) return denied()
+            var url = request.url
+            if (url.path?.endsWith("/") == true) url = url.buildUpon().path(url.path + "index.html").build()
+            if (url.path?.startsWith("/assets/website/media/") == true) url = url.buildUpon().path(url.path!!.removePrefix("/assets/website")).build()
+            return loader.shouldInterceptRequest(url) ?: denied()
+        }
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = !local(request.url)
+        override fun onPageFinished(view: WebView, url: String) { onFinished() }
+    }
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun localWebView() = WebView(this).apply {
+        settings.javaScriptEnabled = true; settings.allowFileAccess = false; settings.allowContentAccess = false
+        webChromeClient = WebChromeClient(); webViewClient = client(loader())
+    }
+    private fun respond(view: WebView, id: String, result: Any = JSONObject.NULL, error: String? = null) {
+        val message = JSONObject().put("id", id).put("result", result)
+        if (error != null) message.put("error", error)
+        runOnUiThread { view.evaluateJavascript("window.WebeasyBridge.receive($message);", null) }
+    }
+    override fun onDestroy() {
+        generator.destroy()
+        worker.execute { if (storeDelegate.isInitialized()) store.close() }; worker.shutdown()
+        super.onDestroy()
+    }
+    companion object { private const val base = "https://appassets.androidplatform.net" }
+}

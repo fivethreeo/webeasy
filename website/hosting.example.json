@@ -1,0 +1,8 @@
+{
+  "protocol": "sftp",
+  "host": "hosting.example.com",
+  "port": 22,
+  "username": "publisher",
+  "password": "replace-with-account-password",
+  "directory": "/public_html"
+}

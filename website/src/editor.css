@@ -1,0 +1,84 @@
+@import "./site.css";
+
+.editor-shell {
+  --measure: 100ch;
+  --padding: var(--s0);
+}
+
+.editor-layout {
+  --sidebar-width: 18rem;
+  --content-min-width: 60%;
+}
+
+.editor-layout > *,
+.editor-layout > :last-child > * {
+  min-inline-size: 0;
+}
+
+.editor-layout .box {
+  --padding: min(var(--s0), 3vw);
+}
+
+.save-actions {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background: var(--color-light);
+  padding-block: var(--s-2);
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding: var(--s-1);
+  border: 1px solid #bad0c6;
+  border-radius: 0.3rem;
+}
+
+.rich-editor {
+  min-block-size: 8rem;
+  overflow-wrap: anywhere;
+  --padding: var(--s0);
+}
+
+.formatting {
+  --gap: var(--s-2);
+}
+
+.formatting button {
+  padding: var(--s-2) var(--s-1);
+}
+
+.record-list,
+#pages,
+#news {
+  padding-inline-start: var(--s0);
+}
+
+.record-list button[aria-current="true"] {
+  font-weight: bold;
+  border-color: currentColor;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+dialog {
+  color: inherit;
+  background: var(--color-light);
+  padding: var(--s1);
+  max-inline-size: min(40rem, calc(100% - 2rem));
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+
+[hidden] {
+  display: none !important;
+}

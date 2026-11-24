@@ -1,0 +1,29 @@
+
+.center {
+  box-sizing: content-box;
+  margin-inline: auto;
+  max-inline-size: var(--measure) !important;
+  padding-inline-start: var(--padding, 0);
+  padding-inline-end: var(--padding, 0);
+}
+
+.center\:text {
+    text-align: center;
+}
+
+.center\:intrinsic {
+  display:flex;
+  flex-direction: column;
+  align-items: center;
+  max-inline-size: none !important;
+}
+
+.center\:intrinsic > .grid {
+  inline-size: 100%;
+}
+
+.center\:intrinsic :is(.reel, :has(.reel)) {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  inline-size: 100%;
+}

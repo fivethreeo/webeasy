@@ -1,0 +1,384 @@
+import "./editor.css";
+import { createRichTextSanitizer } from "./rich-text.js";
+import { newId, normalizeProject, pageRoutes, sortedNews, renderSite, referencedMedia } from "./content-model.js";
+
+const sanitize = createRichTextSanitizer(window);
+const $ = (id) => document.getElementById(id);
+const native = Boolean(window.WebeasyNative?.request || window.webkit?.messageHandlers?.webeasy);
+const requests = new Map();
+window.WebeasyBridge = {
+  receive(message) {
+    const pending = requests.get(message.id);
+    if (!pending) return;
+    requests.delete(message.id);
+    if (message.error) pending.reject(new Error(message.error));
+    else pending.resolve(message.result);
+  },
+};
+let project, catalog, selected, isPreview = false, dirty = false, selectionRange;
+let revision = 0, saveQueue = Promise.resolve();
+export const request = (method, payload = {}) => {
+  if (!native) {
+    if (method === "load") return Promise.all([
+      fetch("content.json").then((response) => response.json()),
+      fetch("catalog.json").then((response) => response.json()),
+    ]).then(([project, catalog]) => ({ project, catalog }));
+    if (method === "save") return Promise.resolve(null);
+    return Promise.reject(new Error("Media import and website export require the mobile app."));
+  }
+  const id = newId();
+  return new Promise((resolve, reject) => {
+    requests.set(id, { resolve, reject });
+    const message = JSON.stringify({ id, method, payload });
+    if (window.WebeasyNative) window.WebeasyNative.request(message);
+    else window.webkit.messageHandlers.webeasy.postMessage(message);
+  });
+};
+const status = (message) => { $("status").textContent = message; };
+const changed = () => { revision += 1; dirty = true; status("Unsaved changes."); };
+const run = (action) => async (event) => {
+  event?.preventDefault();
+  try { await action(); } catch (error) { status(error.message); }
+};
+function element(tag, className, text) {
+  const result = document.createElement(tag);
+  if (className) result.className = className;
+  if (text !== undefined) result.textContent = text;
+  return result;
+}
+function button(text, action) {
+  const result = element("button", "", text);
+  result.type = "button";
+  result.addEventListener("click", run(action));
+  return result;
+}
+function input(record, key, labelText, type = "text") {
+  const label = element("label", "stack", labelText);
+  const field = document.createElement("input");
+  field.type = type;
+  field.value = record[key] ?? "";
+  field.required = key !== "heading" || record.asides !== undefined;
+  field.addEventListener("input", () => { record[key] = field.value; changed(); refreshLabels(); });
+  label.append(field);
+  return label;
+}
+function rememberSelection(field) {
+  const selection = window.getSelection();
+  if (selection?.rangeCount && field.contains(selection.anchorNode)) selectionRange = selection.getRangeAt(0).cloneRange();
+}
+function restoreSelection(field) {
+  field.focus();
+  const range = selectionRange && field.contains(selectionRange.commonAncestorContainer)
+    ? selectionRange : document.createRange();
+  if (range !== selectionRange) { range.selectNodeContents(field); range.collapse(false); }
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return range;
+}
+function figureDetails(kind) {
+  const dialog = $("media-details");
+  $("media-alt").value = "";
+  $("media-alt").parentElement.hidden = kind !== "image";
+  $("media-caption").value = "";
+  dialog.returnValue = "";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "insert"
+      ? { alt: $("media-alt").value, caption: $("media-caption").value } : null), { once: true });
+    dialog.showModal();
+  });
+}
+export function richEditor(record, key, labelText, options = {}) {
+  const contentProject = options.project ?? project;
+  const onChange = options.onChange ?? changed;
+  const wrapper = element("div", "stack");
+  const label = element("h3", "", labelText);
+  label.id = `label-${record.id}-${key}`;
+  const toolbar = element("div", "cluster formatting");
+  toolbar.setAttribute("role", "group");
+  toolbar.setAttribute("aria-label", `${labelText} formatting`);
+  const field = element("div", "box stack rich-editor");
+  field.contentEditable = "true";
+  field.setAttribute("role", "textbox");
+  field.setAttribute("aria-multiline", "true");
+  field.setAttribute("aria-labelledby", label.id);
+  field.innerHTML = sanitize(record[key]);
+  const update = () => { record[key] = sanitize(field.innerHTML); onChange(record[key]); };
+  const format = (command, value) => {
+    restoreSelection(field);
+    document.execCommand("styleWithCSS", false, false);
+    document.execCommand(command, false, value);
+    update(); rememberSelection(field);
+  };
+  const block = document.createElement("select");
+  block.setAttribute("aria-label", "Paragraph or heading");
+  for (const [value, text] of [["p", "Paragraph"], ["h2", "Heading 2"], ["h3", "Heading 3"], ["h4", "Heading 4"], ["h5", "Heading 5"], ["h6", "Heading 6"]]) {
+    const option = element("option", "", text); option.value = value; block.append(option);
+  }
+  block.addEventListener("pointerdown", () => rememberSelection(field));
+  block.addEventListener("change", () => format("formatBlock", block.value));
+  toolbar.append(block);
+  for (const [text, command, value] of [
+    ["Bold", "bold"], ["Italic", "italic"], ["Strike", "strikeThrough"], ["Underline", "underline"],
+    ["Bullets", "insertUnorderedList"], ["Numbers", "insertOrderedList"], ["Quote", "formatBlock", "blockquote"],
+  ]) {
+    const control = button(text, () => format(command, value));
+    control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
+    toolbar.append(control);
+  }
+  const emphasis = button("Emphasis", () => {
+    const range = restoreSelection(field);
+    const em = document.createElement("em");
+    em.append(range.extractContents());
+    if (!em.textContent) em.textContent = "emphasis";
+    range.insertNode(em);
+    range.selectNodeContents(em);
+    update(); rememberSelection(field);
+  });
+  emphasis.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
+  toolbar.append(emphasis);
+  for (const kind of ["image", "video"]) {
+    const control = button(kind === "image" ? "Phone image" : "Phone video", async () => {
+      rememberSelection(field);
+      control.disabled = true;
+      try {
+        status("Choose media on your phone...");
+        const media = await request("pickMedia", { kind });
+        if (!media) { status("Media selection cancelled."); return; }
+        if (!contentProject.media.some((item) => item.id === media.id)) contentProject.media.push(media);
+        const details = await figureDetails(kind);
+        if (!details) { status("Figure cancelled. The imported media is retained locally."); return; }
+        const figure = element("figure", "stack");
+        if (kind === "image") {
+          const img = document.createElement("img");
+          img.setAttribute("src", `media/${media.filename}`);
+          img.setAttribute("alt", details.alt);
+          figure.append(img);
+        } else {
+          const video = document.createElement("video");
+          video.setAttribute("controls", "");
+          video.setAttribute("playsinline", "");
+          video.setAttribute("preload", "metadata");
+          const source = document.createElement("source");
+          source.setAttribute("src", `media/${media.filename}`);
+          source.setAttribute("type", media.mimeType);
+          video.append(source);
+          figure.append(video);
+        }
+        if (details.caption) figure.append(element("figcaption", "", details.caption));
+        const range = restoreSelection(field);
+        // Insert between blocks rather than creating invalid figures inside paragraphs.
+        let block = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+        while (block?.parentElement && block.parentElement !== field) block = block.parentElement;
+        if (block && block !== field && block.parentElement === field) block.after(figure);
+        else field.append(figure);
+        const paragraph = element("p", "", "");
+        paragraph.append(document.createElement("br"));
+        figure.after(paragraph);
+        update();
+      } finally { control.disabled = false; }
+    });
+    control.disabled = !native;
+    control.addEventListener("pointerdown", () => rememberSelection(field));
+    toolbar.append(control);
+  }
+  field.addEventListener("input", update);
+  field.addEventListener("keyup", () => rememberSelection(field));
+  field.addEventListener("pointerup", () => rememberSelection(field));
+  field.addEventListener("blur", () => { record[key] = sanitize(field.innerHTML); });
+  field.addEventListener("paste", (event) => {
+    event.preventDefault();
+    const html = event.clipboardData.getData("text/html");
+    if (html) document.execCommand("insertHTML", false, sanitize(html));
+    else document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+    update();
+  });
+  wrapper.append(label, toolbar, field);
+  return wrapper;
+}
+function collection(owner, key, title, create, renderRecord) {
+  const wrapper = element("section", "stack");
+  const header = element("div", "cluster");
+  header.append(element("h3", "", title), button(`Add ${key === "sections" ? "section" : "aside"}`, () => {
+    owner[key].push(create()); changed(); renderEditor();
+  }));
+  wrapper.append(header);
+  owner[key].forEach((record, index) => {
+    const card = element("section", "stack box");
+    const actions = element("div", "cluster");
+    const move = (offset) => {
+      const target = index + offset;
+      if (target < 0 || target >= owner[key].length) return;
+      [owner[key][index], owner[key][target]] = [owner[key][target], owner[key][index]];
+      changed(); renderEditor();
+    };
+    actions.append(button("Move up", () => move(-1)), button("Move down", () => move(1)),
+      button("Remove", () => { owner[key].splice(index, 1); changed(); renderEditor(); }));
+    card.append(...renderRecord(record), actions);
+    wrapper.append(card);
+  });
+  return wrapper;
+}
+const asideList = (owner) => collection(owner, "asides", "Asides",
+  () => ({ id: newId(), heading: "", content: "<p></p>" }),
+  (aside) => [input(aside, "heading", "Heading (optional)"), richEditor(aside, "content", "Aside content")]);
+const sectionList = (owner) => collection(owner, "sections", "Sections",
+  () => ({ id: newId(), heading: "New section", content: "<p></p>", asides: [] }),
+  (section) => [input(section, "heading", "Section heading"), richEditor(section, "content", "Section content"), asideList(section)]);
+
+function findSelected() {
+  return pageRoutes(project.pages).map((entry) => ({ ...entry, kind: "page" }))
+    .concat(project.news.map((record) => ({ record, route: `/news/${record.date}/${record.slug}/`, kind: "news" })))
+    .find((entry) => entry.record.id === selected);
+}
+function refreshLabels() {
+  const pages = pageRoutes(project.pages);
+  const labels = new Map([
+    ...pages.map((entry) => [entry.record.id, `${"— ".repeat(entry.ancestors.length)}${entry.record.menuTitle || entry.record.title || "Untitled"}`]),
+    ...project.news.map((record) => [record.id, `${record.date} · ${record.title || "Untitled"}`]),
+  ]);
+  document.querySelectorAll(".record-list button").forEach((control) => {
+    control.textContent = labels.get(control.dataset.recordId) ?? "";
+  });
+  const notice = $("selected-route");
+  if (notice) notice.textContent = `URL: ${findSelected()?.route ?? ""}`;
+}
+function renderLists() {
+  const add = (record, list, label) => {
+    const li = document.createElement("li");
+    const control = button(label, () => {
+      selected = record.id; isPreview = false; selectionRange = null; renderEditor(); renderLists();
+      if (!window.matchMedia("(min-width: 60rem)").matches) $("content-navigation").open = false;
+    });
+    control.dataset.recordId = record.id;
+    control.setAttribute("aria-current", String(selected === record.id));
+    li.append(control); list.append(li);
+  };
+  $("pages").replaceChildren();
+  for (const entry of pageRoutes(project.pages)) {
+    add(entry.record, $("pages"), `${"— ".repeat(entry.ancestors.length)}${entry.record.menuTitle || entry.record.title}`);
+  }
+  $("news").replaceChildren();
+  for (const record of sortedNews(project.news)) add(record, $("news"), `${record.date} · ${record.title}`);
+  $("pages").classList.add("record-list"); $("news").classList.add("record-list");
+  $("add-subpage").disabled = findSelected()?.kind !== "page";
+}
+function renderEditor() {
+  const form = $("editor-form");
+  form.replaceChildren();
+  form.hidden = isPreview;
+  $("preview").hidden = !isPreview;
+  $("preview-toggle").textContent = isPreview ? "Edit" : "Preview";
+  const entry = findSelected();
+  if (isPreview) {
+    const normalized = normalizeProject(project, sanitize);
+    const path = entry ? `${entry.route.slice(1)}index.html` : "news/index.html";
+    const html = renderSite(normalized, catalog).find((file) => file.path === path)?.html;
+    $("preview").innerHTML = new DOMParser().parseFromString(html, "text/html").body.innerHTML;
+    // The editor lives at the website root; its preview uses root-relative media/menu paths.
+    $("preview").querySelectorAll("a").forEach((link) => link.addEventListener("click", run(() => {
+      const path = link.getAttribute("href");
+      const target = pageRoutes(project.pages).find((item) => item.route.slice(1) === path)
+        ?? project.news.map((record) => ({ record, route: `news/${record.date}/${record.slug}/` })).find((item) => item.route === path);
+      selected = target?.record.id; renderEditor(); renderLists();
+    })));
+    return;
+  }
+  if (!entry) { form.append(element("p", "", "Add a page or news item to start editing.")); return; }
+  const { record, kind } = entry;
+  form.append(element("h2", "", kind === "page" ? "Edit page" : "Edit news"),
+    input(record, "title", "Title"));
+  if (kind === "page") form.append(input(record, "menuTitle", "Menu title"));
+  const routeNotice = element("p", "", `URL: ${entry.route}`);
+  routeNotice.id = "selected-route";
+  form.append(input(record, "slug", "Slug"), input(record, "date", "Date", "date"),
+    routeNotice,
+    richEditor(record, kind === "page" ? "content" : "shortContent", kind === "page" ? "Content" : "Short content"),
+    asideList(record), sectionList(record));
+  const actions = element("div", "cluster");
+  const siblings = kind === "news" ? project.news : entry.ancestors.at(-1)?.children ?? project.pages;
+  const move = (offset) => {
+    const index = siblings.indexOf(record), next = index + offset;
+    if (next < 0 || next >= siblings.length) return;
+    [siblings[index], siblings[next]] = [siblings[next], siblings[index]];
+    changed(); renderLists();
+  };
+  if (kind === "page") actions.append(button("Move page up", () => move(-1)), button("Move page down", () => move(1)));
+  actions.append(button("Delete this item and its owned content", () => {
+    const dialog = document.createElement("dialog");
+    dialog.append(element("p", "", "Delete this item, its subpages, sections, and asides?"));
+    dialog.append(button("Delete", () => {
+      siblings.splice(siblings.indexOf(record), 1);
+      selected = project.pages[0]?.id ?? project.news[0]?.id;
+      dialog.close(); dialog.remove(); changed(); renderLists(); renderEditor();
+    }), button("Cancel", () => { dialog.close(); dialog.remove(); }));
+    document.body.append(dialog); dialog.showModal();
+  }));
+  form.append(actions);
+}
+function createContent(kind, parent) {
+  const today = new Date();
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const collection = kind === "news" ? project.news : parent?.children ?? project.pages;
+  let index = collection.length + 1, slug;
+  do { slug = `${kind}-${index++}`; } while (collection.some((record) => record.slug === slug));
+  const record = { id: newId(), title: kind === "news" ? "New story" : "New page", slug, date, sections: [], asides: [] };
+  if (kind === "news") record.shortContent = "<p></p>";
+  else Object.assign(record, { menuTitle: "New page", content: "<p></p>", children: [] });
+  collection.push(record);
+  selected = record.id; isPreview = false; changed(); renderLists(); renderEditor();
+}
+async function save() {
+  if (!$("editor-form").reportValidity()) throw new Error("Complete the required fields before saving.");
+  const normalized = normalizeProject(project, sanitize);
+  const savedRevision = revision;
+  saveQueue = saveQueue.catch(() => {}).then(() => request("save", { project: normalized }));
+  await saveQueue;
+  dirty = revision !== savedRevision;
+  status(dirty ? "More recent changes are still unsaved." : native ? "Saved locally to SQLite." : "Preview only: changes are not stored.");
+  return normalized;
+}
+if ($("editor-form")) {
+$("save").addEventListener("click", run(save));
+$("editor-form").addEventListener("submit", run(save));
+document.querySelectorAll(".editor-shell > header a").forEach((link) => {
+  link.addEventListener("click", run(async () => {
+    if (dirty) await save();
+    window.location.href = link.href;
+  }));
+});
+$("export").addEventListener("click", run(async () => {
+  $("export").disabled = true;
+  try {
+    const normalized = await save();
+    status("Preparing website...");
+    await request("export", { files: renderSite(normalized, catalog), referencedMedia: referencedMedia(normalized, window) });
+    status(dirty ? "Website export ready. More recent changes are still unsaved." : "Website ready to save or share. The SQLite database is not included.");
+  } finally { $("export").disabled = !native; }
+}));
+$("add-page").addEventListener("click", run(() => createContent("page")));
+$("add-subpage").addEventListener("click", run(() => createContent("page", findSelected()?.record)));
+$("add-news").addEventListener("click", run(() => createContent("news")));
+$("preview-toggle").addEventListener("click", run(() => {
+  if (!isPreview) normalizeProject(project, sanitize);
+  isPreview = !isPreview; renderEditor();
+}));
+$("preview-news").addEventListener("click", run(() => {
+  normalizeProject(project, sanitize);
+  selected = undefined; isPreview = true; renderEditor(); renderLists();
+}));
+window.addEventListener("beforeunload", (event) => {
+  if (dirty) { event.preventDefault(); event.returnValue = ""; }
+});
+run(async () => {
+  const loaded = await request("load");
+  project = normalizeProject(loaded.project, sanitize); catalog = loaded.catalog;
+  selected = project.pages[0]?.id ?? project.news[0]?.id;
+  $("storage-mode").textContent = native
+    ? "Local SQLite project. Save edits before closing the app."
+    : "Browser preview only: edits are not stored. The mobile apps use local SQLite.";
+  $("export").disabled = !native;
+  $("content-navigation").open = window.matchMedia("(min-width: 60rem)").matches;
+  renderLists(); renderEditor(); status("Ready.");
+})();
+}

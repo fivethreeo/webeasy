@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "about",
+      "title": "About the coast",
+      "menuTitle": "About",
+      "slug": "about",
+      "date": "2026-11-24",
+      "content": "<p>A place for <strong>stories</strong>, <i>small discoveries</i>, and <em>new perspectives</em>.</p><figure><img src=\"assets/coast.svg\" alt=\"Illustrated coastline\"><figcaption>Our shoreline.</figcaption></figure>",
+      "asides": [{ "id": "about-note", "heading": "A little note", "content": "<p>Come as you are.</p>" }],
+      "sections": [
+        {
+          "id": "about-values",
+          "heading": "What matters to us",
+          "content": "<h3>Keep it simple</h3><p><u>Readable pages</u>, <s>unnecessary complexity</s>, and <b>your own hosting</b>.</p><ul><li>Good stories</li><li>Thoughtful pictures</li></ul><ol><li>Edit</li><li>Publish</li></ol><blockquote><p>Make room for the unexpected.</p></blockquote>",
+          "asides": [{ "id": "values-note", "heading": "Remember", "content": "<p>Sections can have their own asides.</p>" }]
+        }
+      ],
+      "children": [
+        {
+          "id": "team",
+          "title": "Our team",
+          "menuTitle": "Team",
+          "slug": "team",
+          "date": "2026-11-24",
+          "content": "<p>People who care about the coast.</p>",
+          "sections": [],
+          "asides": [],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "news": [
+    { "id": "news-walk", "title": "A weekend walk", "slug": "weekend-walk", "date": "2026-11-22", "shortContent": "<p>A new route along the shoreline.</p>" },
+    {
+      "id": "news-editor",
+      "title": "A simpler way to publish",
+      "slug": "simpler-publishing",
+      "date": "2026-11-24",
+      "shortContent": "<p>Edit on your phone and publish to <strong>your own website</strong>.</p>",
+      "asides": [{ "id": "news-editor-note", "heading": "On your phone", "content": "<p>Your editable project stays in local SQLite.</p>" }],
+      "sections": [
+        {
+          "id": "news-editor-media",
+          "heading": "Pictures and video",
+          "content": "<p>Use the editor to import phone media as figures with captions.</p><figure><video controls poster=\"assets/coast.svg\"></video><figcaption>Import your own clip to replace this placeholder.</figcaption></figure>",
+          "asides": [{ "id": "news-video-note", "heading": "Video formats", "content": "<p>MP4 is recommended for broad browser compatibility.</p>" }]
+        }
+      ]
+    },
+    { "id": "news-photo", "title": "New photographs", "slug": "new-photographs", "date": "2026-11-23", "shortContent": "<p>A fresh view of familiar places.</p>" },
+    { "id": "news-old", "title": "The first story", "slug": "first-story", "date": "2026-11-21", "shortContent": "<p>This older story has its own URL, but is not in the three-item listing.</p>" }
+  ],
+  "media": []
+}

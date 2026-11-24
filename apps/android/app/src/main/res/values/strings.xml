@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Webeasy</string>
+    <string name="templates">Templates</string>
+    <string name="components">Building blocks</string>
+    <string name="back">Back</string>
+    <string name="share_website">Save or share website</string>
+    <string name="resources_unavailable">Website resources unavailable</string>
+</resources>

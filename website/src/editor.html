@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; frame-src 'none'; base-uri 'self'; object-src 'none'">
+  <title>Webeasy editor</title>
+  <link rel="stylesheet" href="assets/editor.css">
+  <script defer src="assets/editor.js"></script>
+</head>
+<body>
+  <main class="center stack editor-shell">
+    <header class="stack">
+      <h1>Webeasy</h1>
+      <p id="storage-mode">Opening local project...</p>
+      <nav class="cluster" aria-label="Examples"><a href="index.html">Templates</a><a href="showcase.html">Building blocks</a></nav>
+    </header>
+    <div class="cluster save-actions" aria-label="Saving and export">
+      <button id="save" type="button">Save</button>
+      <button id="export" type="button">Export website</button>
+    </div>
+    <div class="cluster" aria-label="Project actions">
+      <button id="add-page" type="button">Add page</button>
+      <button id="add-subpage" type="button">Add subpage</button>
+      <button id="add-news" type="button">Add news</button>
+      <button id="preview-toggle" type="button">Preview</button>
+      <button id="preview-news" type="button">Latest news</button>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+    <div class="with-sidebar editor-layout">
+      <nav class="stack box" aria-label="Content">
+        <details id="content-navigation">
+          <summary>Choose content</summary>
+          <div class="stack">
+            <h2>Pages</h2><p>The first top-level page is the homepage.</p><ul class="stack" id="pages"></ul>
+            <h2>News</h2><ul class="stack" id="news"></ul>
+          </div>
+        </details>
+      </nav>
+      <div class="stack">
+        <form class="stack" id="editor-form"></form>
+        <section class="stack" id="preview" aria-label="Website preview" hidden></section>
+      </div>
+    </div>
+  </main>
+  <dialog id="media-details">
+    <form class="stack" method="dialog">
+      <h2>Figure details</h2>
+      <label class="stack">Alternative text (images)<input id="media-alt" type="text"></label>
+      <label class="stack">Caption (optional)<input id="media-caption" type="text"></label>
+      <p>MP4 is recommended for videos. Other formats depend on the viewer's browser and codecs.</p>
+      <div class="cluster"><button value="insert">Insert figure</button><button value="cancel">Cancel</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

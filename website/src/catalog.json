@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "page",
+      "title": "Simple page",
+      "description": "A welcoming page with a title, introduction, and content blocks.",
+      "file": "templates/page.html",
+      "example": {
+        "title": "Welcome to the coast",
+        "date": "2026-11-24",
+        "description": "Stories, photographs, and small discoveries from the shoreline.",
+        "blocks": ["text", "image", "callout", "video"]
+      }
+    },
+    {
+      "id": "news",
+      "title": "News article",
+      "description": "A dated news item with short rich text, sections, and asides.",
+      "file": "templates/news.html",
+      "example": { "title": "A simpler way to publish", "date": "2026-11-24", "blocks": ["section", "aside"] }
+    },
+    {
+      "id": "news-index",
+      "title": "Latest news",
+      "description": "The three newest news items, rendered as articles.",
+      "file": "templates/news-index.html",
+      "example": { "blocks": ["text"] }
+    },
+    {
+      "id": "article",
+      "title": "Article",
+      "description": "A readable article with an author and publication date.",
+      "file": "templates/article.html",
+      "example": {
+        "title": "A slower kind of weekend",
+        "description": "Take the scenic route and leave room for the unexpected.",
+        "author": "Webeasy",
+        "date": "2026-11-24",
+        "blocks": ["image", "text", "callout"]
+      }
+    }
+  ],
+  "components": [
+    {
+      "id": "section",
+      "title": "Section",
+      "description": "An owned section with a heading, rich content, and optional asides.",
+      "file": "components/section.html",
+      "example": { "heading": "A section", "content": "<p>Rich text belongs here.</p>" }
+    },
+    {
+      "id": "aside",
+      "title": "Aside",
+      "description": "An optional aside belonging to a page, news item, or section.",
+      "file": "components/aside.html",
+      "example": { "heading": "A related note", "content": "<h3>A related note</h3><p>An aside belongs to its parent.</p>" }
+    },
+    {
+      "id": "text",
+      "title": "Text",
+      "description": "A heading and plain-text paragraph.",
+      "file": "components/text.html",
+      "example": {
+        "heading": "Make room for a little adventure",
+        "body": "A walk by the sea, a shared meal, and a story worth remembering. Edit this text in your own project."
+      }
+    },
+    {
+      "id": "image",
+      "title": "Image",
+      "description": "An image with accessible alternative text and a caption.",
+      "file": "components/image.html",
+      "example": {
+        "src": "assets/coast.svg",
+        "alt": "Illustrated coastline with hills, sea, and a setting sun",
+        "caption": "An original illustration bundled with the examples."
+      }
+    },
+    {
+      "id": "video",
+      "title": "Video",
+      "description": "A native video player with a poster and caption. Add your own video source.",
+      "file": "components/video.html",
+      "example": {
+        "poster": "assets/coast.svg",
+        "caption": "Video placeholder: supply a local video file when editing."
+      }
+    },
+    {
+      "id": "callout",
+      "title": "Callout",
+      "description": "A highlighted note with optional expandable details.",
+      "file": "components/callout.html",
+      "example": {
+        "heading": "Before you set out",
+        "body": "Bring a camera and something warm.",
+        "details": "The website's JavaScript enhances this disclosure with an expand/collapse-all button."
+      }
+    }
+  ]
+}

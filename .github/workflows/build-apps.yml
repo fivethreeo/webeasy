@@ -1,0 +1,64 @@
+name: Build sideload apps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:assembleDebug
+        working-directory: apps/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webeasy-android-development-apk
+          path: apps/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run package:website
+      - run: brew install xcodegen
+      - run: xcodegen generate
+        working-directory: apps/ios
+      - run: >-
+          xcodebuild -project Webeasy.xcodeproj -scheme Webeasy
+          -destination 'generic/platform=iOS' -sdk iphoneos -configuration Release
+          -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+          "CURRENT_PROJECT_VERSION=${{ github.run_number }}" build
+        working-directory: apps/ios
+      - name: Package unsigned IPA for SideStore/AltStore
+        working-directory: apps/ios
+        run: |
+          mkdir -p build/ipa/Payload
+          ditto build/Build/Products/Release-iphoneos/Webeasy.app build/ipa/Payload/Webeasy.app
+          cd build/ipa
+          zip -qry ../Webeasy.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webeasy-ios-sidestore-ipa
+          path: apps/ios/build/Webeasy.ipa
+          if-no-files-found: error

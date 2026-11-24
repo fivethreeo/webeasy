@@ -1,0 +1,14 @@
+{
+  "name": "webeasy",
+  "private": true,
+  "type": "module",
+  "workspaces": ["website"],
+  "scripts": {
+    "build": "npm run build --workspace website",
+    "package:website": "npm run build && node scripts/package-website.mjs",
+    "test": "npm run test --workspace website && node --test scripts/package-website.test.mjs && python3 -m unittest discover -s scripts -p 'test_*.py'"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

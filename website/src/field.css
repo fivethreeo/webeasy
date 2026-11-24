@@ -1,0 +1,13 @@
+@import "./editor.css";
+
+body {
+  padding: 0;
+}
+
+.field-shell > .stack > h3 {
+  display: none;
+}
+
+.field-shell .box {
+  --padding: var(--s-1);
+}

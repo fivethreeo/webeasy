@@ -1,0 +1,145 @@
+@import "./everylayout/base.css";
+@import "./everylayout/stack.css";
+@import "./everylayout/center.css";
+@import "./everylayout/cluster.css";
+@import "./everylayout/grid.css";
+@import "./everylayout/box.css";
+@import "./everylayout/sidebar.css";
+
+:root {
+  --measure: 64ch;
+  --color-dark: #193e37;
+  --color-light: #fffdf7;
+  color: var(--color-dark);
+  background: var(--color-light);
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+body {
+  padding-block: var(--s2);
+}
+
+.site-shell {
+  --padding: var(--s0);
+  --space: var(--s2);
+}
+
+.content-blocks {
+  --space: var(--s2);
+}
+
+.published-shell {
+  --measure: 90ch;
+}
+
+.rich-content {
+  max-inline-size: 64ch;
+  overflow-wrap: anywhere;
+}
+
+.with-sidebar {
+  --sidebar-width: 16rem;
+}
+
+.content-main,
+.content-asides {
+  min-inline-size: 0;
+}
+
+.site-menu > ul {
+  padding-inline: 0;
+  list-style: none;
+}
+
+.grid {
+  --min: 14rem;
+}
+
+.box {
+  --padding: var(--s1);
+  border-radius: 0.6rem;
+  border-color: #bad0c6;
+}
+
+h1 {
+  font-size: clamp(2rem, 7vw, 3.5rem);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+}
+
+h3 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+h2,
+h3,
+h4,
+h5,
+h6 {
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: #23685a;
+  text-underline-offset: 0.2em;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: #e3efe7;
+  border: 1px solid #bad0c6;
+  border-radius: 0.4rem;
+  padding: var(--s-1) var(--s0);
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 3px solid #a05a13;
+  outline-offset: 4px;
+}
+
+img,
+video {
+  display: block;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  block-size: auto;
+  border-radius: 0.5rem;
+}
+
+video {
+  aspect-ratio: 16 / 9;
+  background: #193e37;
+  object-fit: contain;
+}
+
+.eyebrow {
+  font-weight: 700;
+}
+
+.callout {
+  background: #e3efe7;
+}
+
+summary {
+  cursor: pointer;
+}
+
+.card {
+  text-decoration: none;
+}

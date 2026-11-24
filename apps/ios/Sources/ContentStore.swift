@@ -1,0 +1,320 @@
+import Foundation
+import SQLite3
+import UIKit
+import UniformTypeIdentifiers
+
+enum ContentError: LocalizedError {
+    case invalid(String)
+    var errorDescription: String? {
+        switch self { case .invalid(let message): message }
+    }
+}
+
+final class ContentStore: @unchecked Sendable {
+    let websiteRoot: URL
+    let mediaDirectory: URL
+    private let bundleRoot: URL
+    private let queue = DispatchQueue(label: "no.webeasy.storage")
+    private var database: OpaquePointer?
+
+    init() throws {
+        let files = FileManager.default
+        let support = try files.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                   appropriateFor: nil, create: true).appendingPathComponent("Webeasy", isDirectory: true)
+        guard let bundled = Bundle.main.url(forResource: "Website", withExtension: nil) else {
+            throw ContentError.invalid("Website resources are unavailable.")
+        }
+        bundleRoot = bundled
+        websiteRoot = support.appendingPathComponent("Website", isDirectory: true)
+        mediaDirectory = websiteRoot.appendingPathComponent("media", isDirectory: true)
+        try files.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
+        // Only bundled resources are refreshed; the media folder and database are never replaced.
+        for resource in try files.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil) where resource.lastPathComponent != "media" {
+            let destination = websiteRoot.appendingPathComponent(resource.lastPathComponent)
+            if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
+            try files.copyItem(at: resource, to: destination)
+        }
+        guard sqlite3_open_v2(support.appendingPathComponent("webeasy.sqlite").path, &database,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            sqlite3_close(database)
+            database = nil
+            throw ContentError.invalid("Cannot open local SQLite storage.")
+        }
+        do {
+            try execute("PRAGMA foreign_keys = ON")
+            let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
+            guard version == 0 || version == 1 else {
+                throw ContentError.invalid("A database migration is required. Your content has not been deleted.")
+            }
+            try transaction {
+                if version == 0 {
+                    let schema = try String(contentsOf: bundled.appendingPathComponent("storage.sql"), encoding: .utf8)
+                    guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { throw databaseError() }
+                    try execute("PRAGMA user_version = 1")
+                }
+                if try rows("SELECT value FROM metadata WHERE key = ?", ["seeded"]).isEmpty {
+                    let data = try Data(contentsOf: bundled.appendingPathComponent("content.json"))
+                    guard let seed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        throw ContentError.invalid("Invalid bundled content.")
+                    }
+                    try writeContent(seed)
+                    try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ["seeded", "1"])
+                }
+            }
+        } catch {
+            sqlite3_close(database)
+            database = nil
+            throw error
+        }
+    }
+
+    deinit { sqlite3_close(database) }
+
+    private func databaseError() -> ContentError {
+        .invalid(database.map { String(cString: sqlite3_errmsg($0)) } ?? "SQLite storage is unavailable.")
+    }
+
+    private func statement(_ sql: String, _ values: [Any?]) throws -> OpaquePointer {
+        var prepared: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &prepared, nil) == SQLITE_OK, let prepared else {
+            throw databaseError()
+        }
+        for (offset, value) in values.enumerated() {
+            let index = Int32(offset + 1)
+            let result: Int32
+            if value == nil || value is NSNull {
+                result = sqlite3_bind_null(prepared, index)
+            } else if let number = value as? Int {
+                result = sqlite3_bind_int64(prepared, index, Int64(number))
+            } else if let number = value as? Int64 {
+                result = sqlite3_bind_int64(prepared, index, number)
+            } else if let string = value as? String {
+                result = sqlite3_bind_text(prepared, index, string, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            } else {
+                sqlite3_finalize(prepared)
+                throw ContentError.invalid("Invalid SQLite value.")
+            }
+            if result != SQLITE_OK { sqlite3_finalize(prepared); throw databaseError() }
+        }
+        return prepared
+    }
+
+    private func execute(_ sql: String, _ values: [Any?] = []) throws {
+        let prepared = try statement(sql, values)
+        defer { sqlite3_finalize(prepared) }
+        guard sqlite3_step(prepared) == SQLITE_DONE else { throw databaseError() }
+    }
+
+    private func rows(_ sql: String, _ values: [Any?] = []) throws -> [[String: Any]] {
+        let prepared = try statement(sql, values)
+        defer { sqlite3_finalize(prepared) }
+        var records: [[String: Any]] = []
+        var result = sqlite3_step(prepared)
+        while result == SQLITE_ROW {
+            var record: [String: Any] = [:]
+            for index in 0..<sqlite3_column_count(prepared) {
+                let name = String(cString: sqlite3_column_name(prepared, index))
+                switch sqlite3_column_type(prepared, index) {
+                case SQLITE_NULL: record[name] = NSNull()
+                case SQLITE_INTEGER: record[name] = Int(sqlite3_column_int64(prepared, index))
+                default: record[name] = String(cString: sqlite3_column_text(prepared, index))
+                }
+            }
+            records.append(record)
+            result = sqlite3_step(prepared)
+        }
+        guard result == SQLITE_DONE else { throw databaseError() }
+        return records
+    }
+
+    private func transaction(_ operation: () throws -> Void) throws {
+        try execute("BEGIN IMMEDIATE")
+        do { try operation(); try execute("COMMIT") }
+        catch { try? execute("ROLLBACK"); throw error }
+    }
+
+    private func text(_ record: [String: Any], _ key: String, required: Bool = false) throws -> String {
+        guard let value = record[key] as? String,
+              !required || !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ContentError.invalid("Missing \(key).")
+        }
+        return value
+    }
+
+    private func identity(_ record: [String: Any]) throws -> String {
+        let id = try text(record, "id", required: true)
+        guard id.range(of: "^[a-zA-Z0-9_-]+$", options: .regularExpression) != nil else {
+            throw ContentError.invalid("Invalid content ID.")
+        }
+        return id
+    }
+
+    private func list(_ record: [String: Any], _ key: String) throws -> [[String: Any]] {
+        guard record[key] != nil else { return [] }
+        guard let records = record[key] as? [[String: Any]] else { throw ContentError.invalid("Invalid \(key).") }
+        return records
+    }
+
+    private func writeAsides(_ record: [String: Any], owner: String, id: String) throws {
+        for (position, aside) in try list(record, "asides").enumerated() {
+            try execute("INSERT INTO asides (id, \(owner)_id, heading, content, position) VALUES (?, ?, ?, ?, ?)",
+                        [try identity(aside), id, aside["heading"] as? String ?? "", try text(aside, "content"), position])
+        }
+    }
+
+    private func writeRelated(_ record: [String: Any], owner: String, id: String) throws {
+        try writeAsides(record, owner: owner, id: id)
+        for (position, section) in try list(record, "sections").enumerated() {
+            let sectionID = try identity(section)
+            try execute("INSERT INTO sections (id, \(owner)_id, heading, content, position) VALUES (?, ?, ?, ?, ?)",
+                        [sectionID, id, try text(section, "heading", required: true), try text(section, "content"), position])
+            try writeAsides(section, owner: "section", id: sectionID)
+        }
+    }
+
+    private func writePages(_ pages: [[String: Any]], parent: String?) throws {
+        for (position, page) in pages.enumerated() {
+            let id = try identity(page)
+            let slug = try text(page, "slug", required: true)
+            guard slug.range(of: "^[a-z0-9]+(?:-[a-z0-9]+)*$", options: .regularExpression) != nil else {
+                throw ContentError.invalid("Invalid slug.")
+            }
+            if parent == nil && ["news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"].contains(slug) {
+                throw ContentError.invalid("Reserved page slug.")
+            }
+            try execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        [id, parent, try text(page, "title", required: true), try text(page, "menuTitle", required: true),
+                         slug, try text(page, "content"), try text(page, "date", required: true), position])
+            try writeRelated(page, owner: "page", id: id)
+            try writePages(list(page, "children"), parent: id)
+        }
+    }
+
+    private func writeContent(_ project: [String: Any]) throws {
+        guard project["version"] as? Int == 1 else { throw ContentError.invalid("Unsupported project version.") }
+        try execute("DELETE FROM pages")
+        try execute("DELETE FROM news")
+        try writePages(list(project, "pages"), parent: nil)
+        for news in try list(project, "news") {
+            let id = try identity(news)
+            try execute("INSERT INTO news (id, title, slug, date, short_content) VALUES (?, ?, ?, ?, ?)",
+                        [id, try text(news, "title", required: true), try text(news, "slug", required: true),
+                         try text(news, "date", required: true), try text(news, "shortContent")])
+            try writeRelated(news, owner: "news", id: id)
+        }
+    }
+
+    func save(_ project: [String: Any]) throws {
+        try queue.sync { try transaction { try writeContent(project) } }
+    }
+
+    private func asides(owner: String, id: String) throws -> [[String: Any]] {
+        try rows("SELECT id, heading, content FROM asides WHERE \(owner)_id = ? ORDER BY position", [id])
+    }
+
+    private func related(_ original: [String: Any], owner: String) throws -> [String: Any] {
+        var record = original
+        let id = try text(record, "id", required: true)
+        record["asides"] = try asides(owner: owner, id: id)
+        record["sections"] = try rows("SELECT id, heading, content FROM sections WHERE \(owner)_id = ? ORDER BY position", [id]).map { original in
+            var section = original
+            section["asides"] = try asides(owner: "section", id: text(section, "id", required: true))
+            return section
+        }
+        return record
+    }
+
+    private func pages(parent: String?) throws -> [[String: Any]] {
+        let sql = "SELECT id, title, menu_title AS menuTitle, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
+        return try rows(sql, parent.map { [$0] } ?? []).map { original in
+            var page = try related(original, owner: "page")
+            page["children"] = try pages(parent: text(page, "id", required: true))
+            return page
+        }
+    }
+
+    func project() throws -> [String: Any] {
+        try queue.sync {
+            ["version": 1, "pages": try pages(parent: nil),
+             "news": try rows("SELECT id, title, slug, date, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
+             "media": try rows("SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id")]
+        }
+    }
+
+    static func safeFile(_ root: URL, _ path: String) throws -> URL {
+        guard path.range(of: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$", options: .regularExpression) != nil,
+              !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else {
+            throw ContentError.invalid("Invalid file path.")
+        }
+        let url = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+        guard url.path.hasPrefix(root.standardizedFileURL.resolvingSymlinksInPath().path + "/") else {
+            throw ContentError.invalid("Invalid file path.")
+        }
+        return url
+    }
+
+    func importMedia(_ source: URL, kind: String, typeIdentifier: String) throws -> [String: Any] {
+        try queue.sync {
+            let id = UUID().uuidString
+            let type = UTType(filenameExtension: source.pathExtension) ?? UTType(typeIdentifier)
+            var mime = type?.preferredMIMEType ?? ""
+            let formats = ["image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+                           "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "video/ogg": "ogg"]
+            var file: URL
+            if kind == "image", formats[mime] == nil {
+                guard let image = UIImage(contentsOfFile: source.path), let data = image.jpegData(compressionQuality: 0.9) else {
+                    throw ContentError.invalid("Cannot read this image. Choose JPEG or PNG.")
+                }
+                mime = "image/jpeg"
+                file = mediaDirectory.appendingPathComponent("\(id).jpg")
+                try data.write(to: file, options: .atomic)
+            } else {
+                guard mime.hasPrefix("\(kind)/"), let ext = formats[mime] else {
+                    throw ContentError.invalid("Unsupported media format. MP4 is recommended for video.")
+                }
+                file = mediaDirectory.appendingPathComponent("\(id).\(ext)")
+                try FileManager.default.copyItem(at: source, to: file)
+            }
+            do {
+                let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
+                guard size > 0 else { throw ContentError.invalid("The selected media file is empty.") }
+                try execute("INSERT INTO media (id, filename, mime_type, original_name, size) VALUES (?, ?, ?, ?, ?)",
+                            [id, file.lastPathComponent, mime, source.lastPathComponent, size])
+                return ["id": id, "filename": file.lastPathComponent, "mimeType": mime,
+                        "originalName": source.lastPathComponent, "size": size]
+            } catch { try? FileManager.default.removeItem(at: file); throw error }
+        }
+    }
+
+    func exportSite(_ documents: [[String: Any]], references: [String]) throws -> URL {
+        try queue.sync {
+            let files = FileManager.default
+            let directory = files.temporaryDirectory.appendingPathComponent("Webeasy-\(UUID().uuidString)", isDirectory: true)
+            try files.createDirectory(at: directory, withIntermediateDirectories: true)
+            func copy(_ source: URL, _ path: String) throws {
+                let target = try Self.safeFile(directory, path)
+                try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if files.fileExists(atPath: target.path) { try files.removeItem(at: target) }
+                try files.copyItem(at: source, to: target)
+            }
+            do {
+                for document in documents {
+                    let path = try text(document, "path", required: true)
+                    guard path.hasSuffix(".html") else { throw ContentError.invalid("Invalid exported document.") }
+                    let target = try Self.safeFile(directory, path)
+                    try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try text(document, "html").write(to: target, atomically: true, encoding: .utf8)
+                }
+                for path in ["assets/site.css", "assets/site.js"] + references {
+                    guard path.hasPrefix("assets/") || path.hasPrefix("media/") else { throw ContentError.invalid("Invalid media reference.") }
+                    if path.hasPrefix("media/"),
+                       try rows("SELECT id FROM media WHERE filename = ?", [String(path.dropFirst(6))]).isEmpty {
+                        throw ContentError.invalid("Referenced media is missing.")
+                    }
+                    try copy(Self.safeFile(websiteRoot, path), path)
+                }
+                return directory
+            } catch { try? files.removeItem(at: directory); throw error }
+        }
+    }
+}

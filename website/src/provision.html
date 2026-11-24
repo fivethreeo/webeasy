@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self' ws:; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>Hosting connection QR | Webeasy development</title>
+  <link rel="stylesheet" href="assets/provision.css">
+  <script defer src="assets/provision.js"></script>
+</head>
+<body>
+  <main class="center stack site-shell">
+    <header class="stack">
+      <h1>Hosting connection QR</h1>
+      <p>From <code>hosting.local.json</code>.</p>
+    </header>
+    <section id="qr-result" class="stack">
+      <h2>Scan in Webeasy</h2>
+      <div id="connection-qr"><!-- CONNECTION_QR --></div>
+      <p>The app's connection scanner is a future feature; this scaffold defines its QR format.</p>
+    </section>
+    <p id="status" role="status" aria-live="polite"><!-- CONNECTION_STATUS --></p>
+    <a id="load-local" href="provision.html">Reload local connection JSON</a>
+    <a href="provision.svg">Open QR image directly</a>
+    <nav class="cluster"><a href="index.html">Templates</a><a href="showcase.html">Building blocks</a></nav>
+    <aside class="box stack callout">
+      <p><strong>Keep the QR code private.</strong> It contains the server password.</p>
+      <p>Credentials come from the local JSON file and are never logged or bundled into an app.</p>
+    </aside>
+    <p id="ftp-warning" hidden>Plain FTP is unencrypted. Use it only for trusted LAN testing.</p>
+  </main>
+</body>
+</html>

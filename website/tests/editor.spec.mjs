@@ -1,0 +1,155 @@
+import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+const project = JSON.parse(await readFile(new URL("../src/content.json", import.meta.url), "utf8"));
+const photo = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
+const clip = await readFile(new URL("./fixtures/clip.mp4", import.meta.url));
+
+async function openEditor(page) {
+  const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
+  await page.addInitScript(({ project, catalog, photoSize, videoSize }) => {
+    window.__savedProject = project;
+    window.WebeasyNative = {
+      request(serialized) {
+        const { id, method, payload } = JSON.parse(serialized);
+        let result = null;
+        if (method === "load") result = { project: window.__savedProject, catalog };
+        if (method === "save") window.__savedProject = payload.project;
+        if (method === "pickMedia") result = payload.kind === "image"
+          ? { id: "imported-image", filename: "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
+          : { id: "imported-video", filename: "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize };
+        if (method === "export") window.__exported = payload;
+        queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
+      },
+    };
+  }, { project, catalog, photoSize: photo.length, videoSize: clip.length });
+  await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
+  await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
+  await page.goto("/editor.html");
+  await expect(page.getByRole("status")).toHaveText("Ready.");
+}
+
+test("edits after repeated saves, nested content, and subpages remain in the saved project", async ({ page }) => {
+  await openEditor(page);
+  const title = page.getByLabel("Title", { exact: true });
+  await title.fill("First edit");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved locally to SQLite.");
+  await title.fill("Second edit");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].title)).toBe("Second edit");
+  await page.getByRole("button", { name: "Add subpage", exact: true }).click();
+  await page.getByLabel("Title", { exact: true }).fill("A phone subpage");
+  await page.getByLabel("Menu title").fill("Phone");
+  await page.getByLabel("Slug").fill("phone");
+  await page.getByRole("button", { name: "Add section", exact: true }).click();
+  await page.getByLabel("Section heading").fill("A new section");
+  await page.getByRole("button", { name: "Add aside", exact: true }).last().click();
+  await page.getByLabel("Heading (optional)").fill("Section note");
+  await page.getByRole("textbox", { name: "Aside content", exact: true }).fill("Owned by this section");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].children.at(-1).sections[0].asides[0].content)).toContain("Owned by this section");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.locator("#preview").getByRole("heading", { name: "A phone subpage", exact: true })).toBeVisible();
+  await expect(page.locator("#preview aside")).toHaveText(/Section note.*Owned by this section/s);
+});
+
+test("phone image/video imports become figures with captions and exportable relative paths", async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole("button", { name: "Phone image", exact: true }).first().click();
+  await page.getByLabel("Alternative text (images)").fill("From my phone");
+  await page.getByLabel("Caption (optional)").fill("A phone photograph");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(page.locator(".rich-editor").first().locator('figure img[alt="From my phone"]')).toHaveAttribute("src", "media/native-test.png");
+  await expect.poll(() => page.locator('img[alt="From my phone"]').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Phone video", exact: true }).first().click();
+  await page.getByLabel("Caption (optional)").fill("A phone clip");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  const video = page.locator(".rich-editor").first().locator("figure video");
+  await expect(video.locator("source")).toHaveAttribute("src", "media/native-test.mp4");
+  await expect(video).toHaveAttribute("controls", "");
+  await video.evaluate(async (video) => { video.muted = true; await video.play(); });
+  await expect.poll(() => video.evaluate((video) => video.readyState)).toBeGreaterThanOrEqual(2);
+  await page.getByRole("button", { name: "Export website", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__exported?.files?.length)).toBeGreaterThan(0);
+  const exported = await page.evaluate(() => window.__exported);
+  const html = exported.files.find((file) => file.path === "about/index.html").html;
+  expect(html).toContain('<figcaption>A phone photograph</figcaption>');
+  expect(html).toContain('<figcaption>A phone clip</figcaption>');
+  expect(html).toContain('src="media/native-test.mp4"');
+  expect(exported.referencedMedia).toContain("media/native-test.png");
+  expect(exported.referencedMedia).toContain("media/native-test.mp4");
+});
+
+test("latest news renders three articles and editor/aside layouts reflow at enlarged text", async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole("button", { name: "Latest news", exact: true }).click();
+  await expect(page.locator("#preview article")).toHaveCount(3);
+  await expect(page.locator("#preview article").first().getByRole("heading")).toHaveText("A simpler way to publish");
+  if (!await page.locator("#content-navigation").evaluate((details) => details.open)) await page.getByText("Choose content", { exact: true }).click();
+  await page.getByRole("button", { name: "About", exact: true }).click();
+  await page.locator("html").evaluate((element) => { element.style.fontSize = "250%"; });
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize)).toBe("40px");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("native embed exposes only a rich-text field, reports edits/height, and formats text", async ({ page }) => {
+  await page.addInitScript(({ photoSize, videoSize }) => {
+    window.WebeasyNative = {
+      request(serialized) {
+        const { id, method, payload } = JSON.parse(serialized);
+        if (method === "ready") window.WebeasyField.setValue("<p>Hello from the phone</p>");
+        if (method === "change") window.__content = payload.content;
+        if (method === "resize") window.__fieldHeight = payload.height;
+        const result = method === "pickMedia" ? (payload.kind === "image"
+          ? { id: "field-image", filename: "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
+          : { id: "field-video", filename: "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize }) : null;
+        queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
+      },
+    };
+  }, { photoSize: photo.length, videoSize: clip.length });
+  await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
+  await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
+  await page.goto("/field.html");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await expect(field).toHaveText("Hello from the phone");
+  await expect(page.getByLabel("Title", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Slug", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Date", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.body).paddingTop)).toBe("0px");
+  await field.fill("Native field edit");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("Native field edit");
+  await field.evaluate((field) => {
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    const selection = window.getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  await expect(field.locator("b,strong")).toHaveText("Native field edit");
+  await expect.poll(() => page.evaluate(() => window.__fieldHeight)).toBeGreaterThan(200);
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("Caption (optional)").fill("Native phone figure");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("figure img")).toHaveAttribute("src", "media/native-test.png");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<figcaption>Native phone figure</figcaption>");
+  await page.getByRole("button", { name: "Phone video", exact: true }).click();
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
+});
+
+test("native generation engine normalizes content and renders portable website files", async ({ page }) => {
+  await page.goto("/generator.html");
+  const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
+  const result = await page.evaluate(({ project, catalog }) =>
+    JSON.parse(window.WebeasyGenerator.compile(JSON.stringify({ project, catalog }))), { project, catalog });
+  expect(result.error).toBeUndefined();
+  expect(result.files.some((file) => file.path === "about/team/index.html")).toBe(true);
+  expect(result.files.find((file) => file.path === "news/index.html").html.match(/<article\b/g)).toHaveLength(3);
+  const invalid = await page.evaluate(() => JSON.parse(window.WebeasyGenerator.normalize(JSON.stringify({
+    version: 1, pages: [{ id: "invalid", title: "Bad slug", slug: "../escape", date: "2026-01-01" }], news: [], media: [],
+  }))));
+  expect(invalid.error).toBeTruthy();
+});
