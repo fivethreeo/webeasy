@@ -89,8 +89,8 @@ test("deep subpages, owned sections/asides, and every dated news route are gener
   assert.ok(deep.includes('<base href="../../../">'));
   assert.equal(dom(deep).querySelectorAll('nav[aria-label="Breadcrumb"] a').length, 2);
   const page = dom(files.find((file) => file.path === "about/index.html").html);
-  assert.equal(page.querySelectorAll(".content-blocks section").length, 1);
-  assert.equal(page.querySelectorAll(".content-blocks aside").length, 2);
+  assert.equal(page.querySelectorAll(".content-main section").length, 1);
+  assert.equal(page.querySelectorAll(".content-main aside").length, 2);
   const news = dom(files.find((file) => file.path === "news/2026-11-24/simpler-publishing/index.html").html);
   assert.equal(news.querySelectorAll("aside").length, 2);
   assert.ok(files.some((file) => file.path === "news/2026-11-21/first-story/index.html"));
@@ -111,16 +111,26 @@ test("news index contains only the three newest summaries as articles", () => {
   }
 });
 
-test("page layouts render sections on home and named routes while news remains an article", () => {
+test("simple pages render directly in main, layout containers are nonsemantic, and news remains an article", () => {
   const project = normalize(input);
+  project.pages[0].children = [];
+  project.pages[0].sections = [];
+  project.pages[0].asides = [];
   for (const layout of catalog.templates.filter((entry) => entry.pageLayout)) {
     project.pages[0].templateId = layout.id;
     const files = renderSite(project, catalog);
     for (const path of ["index.html", "about/index.html"]) {
       const document = dom(files.find((file) => file.path === path).html);
-      assert.equal(document.querySelector(".content-blocks").tagName, "SECTION", layout.id);
-      assert.equal(document.querySelector(".content-blocks h1").textContent, project.pages[0].title);
+      assert.equal(document.querySelector("main h1").textContent, project.pages[0].title);
+      assert.equal(document.querySelector("main > section"), null, layout.id);
       assert.equal(document.querySelector("article"), null, layout.id);
+      if (layout.id === "page") {
+        assert.ok(document.querySelector("main > header:not(.site-header) h1"));
+        assert.ok(document.querySelector("main > .rich-content"));
+        assert.equal(document.querySelector(".content-blocks"), null);
+      } else {
+        assert.equal(document.querySelector(".content-blocks").tagName, "DIV", layout.id);
+      }
     }
     const news = dom(files.find((file) => file.path === "news/2026-11-24/simpler-publishing/index.html").html);
     assert.equal(news.querySelector(".content-blocks").tagName, "ARTICLE");
