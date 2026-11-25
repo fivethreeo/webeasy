@@ -12,11 +12,14 @@ enum WebsiteFiles {
     }
 
     static func file(_ root: URL, _ path: String) throws -> URL {
-        guard path.range(of: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$", options: .regularExpression) != nil,
+        guard path.range(of: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$", options: .regularExpression) == (path.startIndex..<path.endIndex),
               !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else {
             throw InvalidWebsitePath()
         }
-        let file = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+        var file = root.standardizedFileURL.resolvingSymlinksInPath()
+        for component in path.split(separator: "/") {
+            file = file.appendingPathComponent(String(component)).standardizedFileURL.resolvingSymlinksInPath()
+        }
         guard file.path.hasPrefix(try prefix(root)) else { throw InvalidWebsitePath() }
         return file
     }
