@@ -90,9 +90,9 @@ struct HostingView: View {
                     .disabled(model.busy || hostingServer == nil)
                 }
                 Section("Publishing paths") {
-                    TextField("Public URL prefix (optional)", text: $publicPathPrefix)
+                    LabeledTextField(title: "Public URL prefix (optional)", text: $publicPathPrefix)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("Upload subfolder (optional)", text: $uploadSubfolder)
+                    LabeledTextField(title: "Upload subfolder (optional)", text: $uploadSubfolder)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
                     Button("Save publishing settings") {

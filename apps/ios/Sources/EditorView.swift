@@ -398,6 +398,21 @@ struct EditorView: View {
 }
 
 @MainActor
+struct LabeledTextField: View {
+    let title: String
+    @Binding var text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            TextField("", text: $text)
+                .accessibilityLabel(title)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+@MainActor
 private struct NativeContentForm: View {
     @ObservedObject var node: ContentNode
     let kind: ContentKind
@@ -426,9 +441,9 @@ private struct NativeContentForm: View {
     var body: some View {
         Form {
             if kind == .page || kind == .news {
-                TextField("Title", text: text("title"))
+                LabeledTextField(title: "Title", text: text("title"))
                 if kind == .page {
-                    TextField("Menu title", text: text("menuTitle"))
+                    LabeledTextField(title: "Menu title", text: text("menuTitle"))
                     Picker("Page layout", selection: Binding(get: { node.fields["templateId"] ?? "page" },
                                                              set: { node.fields["templateId"] = $0; model.changed() })) {
                         ForEach(model.catalog?.templates.filter { $0.pageLayout == true } ?? []) { entry in
@@ -439,10 +454,10 @@ private struct NativeContentForm: View {
                         model.homePageID = node.id; model.changed()
                     }.disabled(model.homePageID == node.id)
                 }
-                TextField("Slug", text: text("slug")).textInputAutocapitalization(.never).autocorrectionDisabled()
+                LabeledTextField(title: "Slug", text: text("slug")).textInputAutocapitalization(.never).autocorrectionDisabled()
                 DatePicker("Date", selection: date, displayedComponents: .date)
             } else {
-                TextField(kind == .aside ? "Heading (optional)" : "Heading", text: text("heading"))
+                LabeledTextField(title: kind == .aside ? "Heading (optional)" : "Heading", text: text("heading"))
             }
             Section(kind == .news ? "Short content" : "Content") {
                 Button(kind == .news ? "Edit short content" : "Edit content") { editingContent = true }
