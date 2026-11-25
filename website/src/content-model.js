@@ -172,8 +172,10 @@ export function renderSite(project, catalog) {
     const prefix = "../".repeat(file.split("/").length - 1) || "./";
     const current = pages.find((entry) => entry.record.id === currentId);
     const activeId = current?.ancestors[0]?.id ?? currentId;
+    const newsIndex = file === "news/index.html" || (file === "index.html" && !pages.length);
+    const newsActive = newsIndex || file.startsWith("news/");
     const navigation = `<nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId)}
-    <li><a href="news/">News</a></li></ul></nav>`;
+    <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav>`;
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

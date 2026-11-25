@@ -85,6 +85,7 @@ test("phone image/video imports become figures with captions and exportable rela
 test("latest news renders three articles and editor/aside layouts reflow at enlarged text", async ({ page }) => {
   await openEditor(page);
   await page.getByRole("button", { name: "Latest news", exact: true }).click();
+  await expect(page.locator("#preview .site-menu a.active")).toHaveText("News");
   await expect(page.locator("#preview article")).toHaveCount(3);
   await expect(page.locator("#preview article").first().getByRole("heading")).toHaveText("A simpler way to publish");
   if (!await page.locator("#content-navigation").evaluate((details) => details.open)) await page.getByText("Choose content", { exact: true }).click();

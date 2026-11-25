@@ -51,7 +51,7 @@ enum SitePublisher {
         var files: [(String, URL)] = []
         for case let file as URL in enumerator.allObjects {
             if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-                files.append((String(file.path.dropFirst(root.path.count + 1)), file))
+                files.append((try WebsiteFiles.relativePath(file, in: root), file))
             }
         }
         files.sort { lhs, rhs in

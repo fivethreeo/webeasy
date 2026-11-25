@@ -43,6 +43,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run package:website
+      - name: Test website file paths
+        run: |
+          swiftc -swift-version 6 apps/ios/Sources/WebsiteFiles.swift apps/ios/Tests/WebsiteFilesTests.swift -o "$RUNNER_TEMP/webeasy-file-tests"
+          "$RUNNER_TEMP/webeasy-file-tests"
       - run: brew install xcodegen
       - run: xcodegen generate
         working-directory: apps/ios

@@ -154,7 +154,7 @@ test("main menu lists top-level pages and marks their active ancestor on nested 
     assert.equal(menu.querySelector("a.active").getAttribute("href"), path.startsWith("other/") ? "other/" : "about/");
     assert.equal(menu.querySelectorAll('a[aria-current="page"]').length, ["about/index.html", "other/index.html"].includes(path) ? 1 : 0);
   }
-  assert.equal(dom(files.find((file) => file.path === "news/index.html").html).querySelectorAll(".site-menu a.active").length, 0);
+  assert.equal(dom(files.find((file) => file.path === "news/index.html").html).querySelector(".site-menu a.active").getAttribute("href"), "news/");
 });
 
 test("subpage navigation is an aside shared by its parent and descendants, not by standalone pages", () => {
@@ -166,6 +166,7 @@ test("subpage navigation is an aside shared by its parent and descendants, not b
     id: "standalone", title: "Standalone", menuTitle: "Standalone", slug: "standalone", date: "2026-11-01",
     content: "<p>Standalone</p>", children: [], sections: [], asides: [],
   });
+
   project.homePageId = child.id;
   const files = renderSite(normalize(project), catalog);
   for (const path of ["index.html", "about/index.html", "about/team/index.html", "about/team/deep/index.html"]) {
@@ -181,4 +182,20 @@ test("subpage navigation is an aside shared by its parent and descendants, not b
   for (const path of ["standalone/index.html", "news/index.html"]) {
     assert.equal(dom(files.find((file) => file.path === path).html).querySelector(".subpage-navigation"), null);
   }
+});
+
+test("News stays active on listings and articles, but aria-current identifies only the listing", () => {
+  const project = normalize(input);
+  const files = renderSite(project, catalog);
+  for (const file of files.filter((file) => file.path.startsWith("news/"))) {
+    const menu = dom(file.html).querySelector(".site-menu");
+    assert.equal(menu.querySelectorAll("a.active").length, 1);
+    const link = menu.querySelector('a[href="news/"]');
+    assert.ok(link.classList.contains("active"), file.path);
+    assert.equal(link.getAttribute("aria-current"), file.path === "news/index.html" ? "page" : null);
+  }
+  const page = dom(files.find((file) => file.path === "about/index.html").html);
+  assert.equal(page.querySelector('.site-menu a[href="news/"]').classList.contains("active"), false);
+  const fallback = renderSite(normalize({ ...input, pages: [] }), catalog).find((file) => file.path === "index.html");
+  assert.equal(dom(fallback.html).querySelector('.site-menu a.active[aria-current="page"]').getAttribute("href"), "news/");
 });

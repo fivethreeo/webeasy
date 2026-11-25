@@ -259,15 +259,7 @@ final class ContentStore: @unchecked Sendable {
     }
 
     static func safeFile(_ root: URL, _ path: String) throws -> URL {
-        guard path.range(of: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$", options: .regularExpression) != nil,
-              !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else {
-            throw ContentError.invalid("Invalid file path.")
-        }
-        let url = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
-        guard url.path.hasPrefix(root.standardizedFileURL.resolvingSymlinksInPath().path + "/") else {
-            throw ContentError.invalid("Invalid file path.")
-        }
-        return url
+        try WebsiteFiles.file(root, path)
     }
 
     func importMedia(_ source: URL, kind: String, typeIdentifier: String) throws -> [String: Any] {

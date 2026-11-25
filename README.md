@@ -145,7 +145,8 @@ Choose **Use as homepage** in a native page/subpage form to select `index.html`.
 Existing projects default to their first top-level page. The selected page
 keeps its named URL and layout. Removing it falls back to the first remaining
 top-level page. The main menu lists top-level pages, marking the current page
-or its top-level ancestor with `class="active"`. Pages with subpages have an
+or its top-level ancestor with `class="active"`. News is active on its listing
+and article pages. Pages with subpages have an
 `<aside>` navigation shared by their descendants, with the current link marked
 active and `aria-current="page"`.
 
