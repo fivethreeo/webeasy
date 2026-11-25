@@ -16,6 +16,9 @@ export async function loadCatalog(root) {
         throw new Error(`Invalid or duplicate ${group} ID: ${entry.id}`);
       }
       ids.add(entry.id);
+      if (entry.pageLayout !== undefined && (group !== "templates" || typeof entry.pageLayout !== "boolean")) {
+        throw new Error(`Invalid page layout flag: ${entry.id}`);
+      }
       if (entry.file !== `${directory}/${entry.id}.html`) {
         throw new Error(`Unexpected source path: ${entry.file}`);
       }

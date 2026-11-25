@@ -101,3 +101,19 @@ test("export references come only from real media elements, not text or unused m
   assert.deepEqual(referencedMedia(project, contentWindow).sort(),
     ["assets/coast.svg", "media/clip.mp4", "media/poster.jpg"].sort());
 });
+
+test("page layouts apply independently to homepage and subpages and unavailable layouts fail", () => {
+  const project = normalize(input);
+  assert.equal(project.pages[0].templateId, "page");
+  project.pages[0].templateId = "landing-page";
+  project.pages[0].children[0].templateId = "reading-page";
+  const files = renderSite(project, catalog);
+  for (const path of ["index.html", "about/index.html"]) {
+    assert.ok(dom(files.find((file) => file.path === path).html).querySelector(".landing-layout"));
+  }
+  assert.ok(dom(files.find((file) => file.path === "about/team/index.html").html).querySelector(".reading-layout"));
+  project.pages[0].templateId = "news";
+  assert.throws(() => renderSite(project, catalog), /Unavailable page layout/);
+  project.pages[0].templateId = "../page";
+  assert.throws(() => normalize(project), /Invalid page layout/);
+});

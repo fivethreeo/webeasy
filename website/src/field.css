@@ -4,10 +4,29 @@ body {
   padding: 0;
 }
 
+.field-shell {
+  --space: var(--s-2);
+}
+
+.field-shell .formatting {
+  position: sticky;
+  inset-block-start: var(--editor-visible-top, 0px);
+  z-index: 1;
+  background: var(--color-light);
+  padding-block: var(--s-2);
+}
+
 .field-shell > .stack > h3 {
   display: none;
 }
 
 .field-shell .box {
   --padding: var(--s-1);
+}
+
+dialog {
+  box-sizing: border-box;
+  max-block-size: calc(var(--editor-visible-height, 100dvh) - 1rem);
+  overflow-y: auto;
+  padding: var(--s-1);
 }

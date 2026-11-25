@@ -9,8 +9,8 @@ class ContentStorageTests(unittest.TestCase):
         self.database.execute("PRAGMA foreign_keys = ON")
         schema = Path(__file__).resolve().parents[1] / "shared" / "storage.sql"
         self.database.executescript(schema.read_text())
-        self.database.execute("INSERT INTO pages VALUES ('parent', NULL, 'Title', 'Menu', 'about', '', '2026-11-24', 0)")
-        self.database.execute("INSERT INTO pages VALUES ('child', 'parent', 'Child', 'Child', 'team', '', '2026-11-24', 0)")
+        self.database.execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('parent', NULL, 'Title', 'Menu', 'about', '', '2026-11-24', 0)")
+        self.database.execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('child', 'parent', 'Child', 'Child', 'team', '', '2026-11-24', 0)")
         self.database.execute("INSERT INTO news VALUES ('story', 'Title', 'story', '2026-11-24', '')")
 
     def tearDown(self):
@@ -37,10 +37,10 @@ class ContentStorageTests(unittest.TestCase):
 
     def test_duplicate_sibling_routes_are_rejected_but_different_parents_and_news_dates_are_allowed(self):
         with self.assertRaises(sqlite3.IntegrityError):
-            self.database.execute("INSERT INTO pages VALUES ('duplicate', NULL, 'Title', 'Menu', 'about', '', '2026-11-24', 1)")
+            self.database.execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('duplicate', NULL, 'Title', 'Menu', 'about', '', '2026-11-24', 1)")
         with self.assertRaises(sqlite3.IntegrityError):
-            self.database.execute("INSERT INTO pages VALUES ('duplicate-child', 'parent', 'Title', 'Menu', 'team', '', '2026-11-24', 1)")
-        self.database.execute("INSERT INTO pages VALUES ('grandchild', 'child', 'Title', 'Menu', 'team', '', '2026-11-24', 0)")
+            self.database.execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('duplicate-child', 'parent', 'Title', 'Menu', 'team', '', '2026-11-24', 1)")
+        self.database.execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('grandchild', 'child', 'Title', 'Menu', 'team', '', '2026-11-24', 0)")
         self.database.execute("INSERT INTO news VALUES ('older', 'Title', 'story', '2026-11-23', '')")
         with self.assertRaises(sqlite3.IntegrityError):
             self.database.execute("INSERT INTO news VALUES ('duplicate', 'Title', 'story', '2026-11-24', '')")

@@ -3,10 +3,17 @@
 One native iOS app and one native Android app for a phone-based webpage editor.
 Both apps use native SwiftUI/Jetpack Compose navigation, lists, metadata fields,
 date pickers, and section/aside/subpage controls. Only rich-text content fields
-and website previews use WebView. They have native local SQLite storage,
+and website previews use WebView. Content editing opens a full-screen WebView
+with persistent image/video actions and a horizontally scrollable formatting bar.
+Select text to toggle inline marks, or set a mark at the caret before typing.
+Pages and subpages have a native **Page layout** picker: Simple page, Landing page,
+or Reading page. Layouts are defined in the Rsbuild catalog and bundled into the
+apps after building; existing SQLite projects migrate without losing content.
+They have native local SQLite storage,
 phone photo/video pickers, and static-site export. Template
-examples and the building-block showcase are also bundled. QR scanning,
-in-app FTP/SFTP/FTPS publishing, and Dropbox backup are not implemented yet.
+examples and the building-block showcase are also bundled. Hosting setup QR codes
+can be read from saved pictures/screenshots or a camera photo. In-app
+FTP/SFTP/FTPS publishing and Dropbox backup are not implemented yet.
 
 ## Structure
 
@@ -36,8 +43,8 @@ npm run dev --workspace website
 Open `http://127.0.0.1:4173` for the template gallery and component showcase.
 Open `/editor.html` for the browser editor preview, `/home.html` for the generated
 example homepage, `/about/team/` for a subpage, and `/news/` for the latest news.
-The standalone `/field.html` page is the rich-text component embedded in native
-forms, not a whole-screen editor. Browser edits are deliberately in-memory only; persistent storage is native SQLite
+The standalone `/field.html` page is the full-screen rich-text editor opened from
+native forms; it does not edit metadata or navigation. Browser edits are deliberately in-memory only; persistent storage is native SQLite
 in the installed phone apps, not browser `localStorage`.
 The Rsbuild development server also serves `/provision.html`, the hosting QR setup
 tool. CSS/JS changes hot-reload; catalog/template/component/media changes reload
@@ -181,15 +188,19 @@ FTP login, restart `run.py server` so its account matches the new QR.
 
 The local credentials file is gitignored. It is not imported into JavaScript or
 copied to the website output. Rsbuild reads it at request time and embeds a
-server-generated SVG QR directly in the local-only setup page. No browser
+server-generated SVG QR directly in the private-LAN setup page. No browser
 JavaScript or canvas is needed to display the QR. Nothing is sent
 to an external backend, logged, or stored in browser storage. Reloading the page
 generates a new QR from the file. Never share a credential
 QR publicly. Prefer SFTP or explicit-TLS FTPS; plain FTP is unencrypted.
 You can also open `/provision.svg` to view the QR image directly. Both routes
-are local-only and no-cache; the generated image is never written to disk.
+are private-LAN-only and no-cache; the generated image is never written to disk.
 
-The app scanner is not implemented yet. Its versioned JSON contract is:
+In the app's **Hosting** tab, choose **Read QR from picture** to import a saved
+QR or screenshot, or **Take a QR picture** to use the camera. Pictures are decoded
+on-device and never added to website media or uploaded. Credentials are stored in
+iOS Keychain or encrypted with Android Keystore, never in the content database.
+Importing a QR does not connect to the server. Its versioned JSON contract is:
 
 ```text
 version: 1
@@ -203,10 +214,10 @@ connection:
   directory: absolute remote path
 ```
 
-Future native scanners must validate this schema, obtain user confirmation,
-store credentials in Keychain/Android secure storage, and verify SSH host keys
-or TLS certificates before publishing. The provisioning page, QR library, and
-connection code are excluded from production website and native bundles.
+The apps validate this schema and reject other QR formats or future versions.
+Future publishing must verify SSH host keys or TLS certificates. The provisioning
+page, QR-generation library, and local credentials are excluded from production
+website and native bundles; only the shared QR validator is packaged.
 
 ## Task runner and development hosting
 
@@ -240,9 +251,11 @@ into production website/native bundles.
 
 The FTP runner creates a random password in gitignored `website/hosting.local.json`
 with restrictive permissions if the file does not exist. It never overwrites an
-existing configuration for another host. Open `/provision.html` on this machine
-to scan its QR. The credential endpoint rejects remote LAN clients, even if they
-spoof a local Host header. Plain FTP is only for trusted LAN testing; do not
+existing configuration for another host. Open `/provision.html` on this machine or
+another private-LAN device
+to scan its QR. Anyone on that LAN can view the credential QR. Public-network
+clients are rejected using the socket address, not forwarded headers; same-origin
+and Host checks still apply. Plain FTP is only for trusted LAN testing; do not
 expose this development server to the internet.
 
 To test app-store uploads against this development FTP host, use the publisher's

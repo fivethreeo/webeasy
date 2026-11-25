@@ -33,6 +33,11 @@ body {
   --measure: 90ch;
 }
 
+.reading-layout {
+  --measure: 55ch;
+  --padding: 0;
+}
+
 .rich-content {
   max-inline-size: 64ch;
   overflow-wrap: anywhere;

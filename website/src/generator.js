@@ -1,5 +1,6 @@
 import { createRichTextSanitizer } from "./rich-text.js";
 import { normalizeProject, renderSite, referencedMedia } from "./content-model.js";
+import { readConnectionQR } from "./connection.mjs";
 
 const sanitize = createRichTextSanitizer(window);
 function result(action) {
@@ -7,6 +8,9 @@ function result(action) {
   catch (error) { return JSON.stringify({ error: error.message }); }
 }
 window.WebeasyGenerator = {
+  readConnection(serialized) {
+    return result(() => ({ connection: readConnectionQR(serialized) }));
+  },
   normalize(serialized) {
     return result(() => ({ project: normalizeProject(JSON.parse(serialized), sanitize) }));
   },

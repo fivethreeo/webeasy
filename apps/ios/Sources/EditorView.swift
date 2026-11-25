@@ -83,6 +83,21 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         if !media.contains(where: { $0["id"] as? String == record["id"] as? String }) { media.append(record) }
     }
 
+    func importHostingQR(_ code: String) async throws -> String {
+        guard ready else { throw ContentError.invalid("Wait for the app to finish opening, then try again.") }
+        let argument = try JSONSerialization.data(withJSONObject: code, options: .fragmentsAllowed)
+        let value = try await generator.evaluateJavaScript(
+            "window.WebeasyGenerator.readConnection(\(String(decoding: argument, as: UTF8.self)))")
+        guard let serialized = value as? String, let data = serialized.data(using: .utf8),
+              let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ContentError.invalid("Cannot read this hosting QR.")
+        }
+        if let error = output["error"] as? String { throw ContentError.invalid(error) }
+        guard let connection = output["connection"] as? [String: Any] else { throw ContentError.invalid("Invalid hosting QR.") }
+        try HostingCredentials.save(JSONSerialization.data(withJSONObject: connection))
+        return "Saved hosting: \(connection["host"] as? String ?? ""). Not connected yet."
+    }
+
     func newNode(_ kind: ContentKind, siblings: [ContentNode]) -> ContentNode {
         let prefix = kind == .news ? "news" : "page"
         var number = siblings.count + 1
@@ -187,6 +202,7 @@ struct EditorView: View {
             contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
             examples(model.catalog?.templates ?? [], title: "Templates").tabItem { Label("Templates", systemImage: "rectangle") }
             examples(model.catalog?.components ?? [], title: "Building blocks").tabItem { Label("Building blocks", systemImage: "square.grid.2x2") }
+            HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
         }
         .sheet(item: $model.preview) { item in
             if item.path.isEmpty {
@@ -249,7 +265,7 @@ private struct NativeContentForm: View {
     @ObservedObject var node: ContentNode
     let kind: ContentKind
     @ObservedObject var model: NativeEditorModel
-    @State private var contentHeight: CGFloat = 400
+    @State private var editingContent = false
 
     private func text(_ key: String) -> Binding<String> {
         Binding(get: { node.fields[key] ?? "" }, set: { node.fields[key] = $0; model.changed() })
@@ -266,15 +282,22 @@ private struct NativeContentForm: View {
         Form {
             if kind == .page || kind == .news {
                 TextField("Title", text: text("title"))
-                if kind == .page { TextField("Menu title", text: text("menuTitle")) }
+                if kind == .page {
+                    TextField("Menu title", text: text("menuTitle"))
+                    Picker("Page layout", selection: Binding(get: { node.fields["templateId"] ?? "page" },
+                                                             set: { node.fields["templateId"] = $0; model.changed() })) {
+                        ForEach(model.catalog?.templates.filter { $0.pageLayout == true } ?? []) { entry in
+                            Text(entry.title).tag(entry.id)
+                        }
+                    }
+                }
                 TextField("Slug", text: text("slug")).textInputAutocapitalization(.never).autocorrectionDisabled()
                 DatePicker("Date", selection: date, displayedComponents: .date)
             } else {
                 TextField(kind == .aside ? "Heading (optional)" : "Heading", text: text("heading"))
             }
             Section(kind == .news ? "Short content" : "Content") {
-                NativeRichField(content: text(kind == .news ? "shortContent" : "content"), height: $contentHeight, model: model)
-                    .frame(height: contentHeight)
+                Button(kind == .news ? "Edit short content" : "Edit content") { editingContent = true }
             }
             if kind == .page || kind == .news {
                 Section("Sections") {
@@ -313,6 +336,17 @@ private struct NativeContentForm: View {
             Text(model.status)
         }
         .navigationTitle(node.fields[kind == .page || kind == .news ? "title" : "heading"] ?? "Content")
+        .fullScreenCover(isPresented: $editingContent) {
+            NavigationStack {
+                NativeRichField(content: text(kind == .news ? "shortContent" : "content"), model: model)
+                    .navigationTitle(kind == .news ? "Short content" : "Content")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        Button("Done") { editingContent = false }
+                        Button("Save") { model.save() }.disabled(!model.ready || model.busy)
+                    }
+            }
+        }
         .toolbar {
             EditButton()
             Button("Save") { model.save() }.disabled(!model.ready || model.busy)

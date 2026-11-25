@@ -3,6 +3,7 @@
   "templates": [
     {
       "id": "page",
+      "pageLayout": true,
       "title": "Simple page",
       "description": "A welcoming page with a title, introduction, and content blocks.",
       "file": "templates/page.html",
@@ -11,6 +12,30 @@
         "date": "2026-11-24",
         "description": "Stories, photographs, and small discoveries from the shoreline.",
         "blocks": ["text", "image", "callout", "video"]
+      }
+    },
+    {
+      "id": "landing-page",
+      "pageLayout": true,
+      "title": "Landing page",
+      "description": "A highlighted introduction followed by content, sections, and related notes.",
+      "file": "templates/landing-page.html",
+      "example": {
+        "title": "Welcome to our corner of the coast",
+        "date": "2026-11-24",
+        "blocks": ["text", "image", "section", "aside"]
+      }
+    },
+    {
+      "id": "reading-page",
+      "pageLayout": true,
+      "title": "Reading page",
+      "description": "A narrower reading layout for longer pages.",
+      "file": "templates/reading-page.html",
+      "example": {
+        "title": "Stories from the shoreline",
+        "date": "2026-11-24",
+        "blocks": ["text", "image", "callout"]
       }
     },
     {

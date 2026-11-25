@@ -16,7 +16,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 class ContentStore(private val context: Context) :
-    SQLiteOpenHelper(context, "webeasy.sqlite", null, 1) {
+    SQLiteOpenHelper(context, "webeasy.sqlite", null, 2) {
     val mediaDirectory = File(context.filesDir, "Media").apply { mkdirs() }
 
     init {
@@ -45,7 +45,8 @@ class ContentStore(private val context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        error("A database migration is required. Your existing content has not been deleted.")
+        check(oldVersion == 1 && newVersion == 2) { "A database migration is required. Your existing content has not been deleted." }
+        db.execSQL("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'")
     }
 
     private fun rows(db: SQLiteDatabase, sql: String, args: Array<String>? = null): JSONArray {
@@ -83,8 +84,8 @@ class ContentStore(private val context: Context) :
 
     private fun pages(db: SQLiteDatabase, parent: String?): JSONArray {
         val records = if (parent == null) rows(db,
-            "SELECT id, title, menu_title AS menuTitle, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
-        else rows(db, "SELECT id, title, menu_title AS menuTitle, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
+            "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
+        else rows(db, "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
         records.objects().forEach { page ->
             related(db, page, "page")
             page.put("children", pages(db, page.getString("id")))
@@ -162,9 +163,11 @@ class ContentStore(private val context: Context) :
         records.objects().forEachIndexed { position, page ->
             val pageId = id(page)
             val pageSlug = slug(page)
+            val templateId = if (page.has("templateId")) text(page, "templateId", true) else "page"
+            require(templateId.matches(Regex("[a-z][a-z0-9-]*"))) { "Invalid page layout ID." }
             if (parent == null) require(pageSlug !in setOf("news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"))
             insert(db, "pages", mapOf("id" to pageId, "parent_id" to parent, "title" to text(page, "title", true),
-                "menu_title" to text(page, "menuTitle", true), "slug" to pageSlug, "content" to text(page, "content"),
+                "menu_title" to text(page, "menuTitle", true), "template_id" to templateId, "slug" to pageSlug, "content" to text(page, "content"),
                 "date" to date(page), "position" to position))
             writeRelated(db, page, "page", pageId)
             writePages(db, page.optJSONArray("children") ?: JSONArray(), pageId)

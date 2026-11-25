@@ -64,8 +64,15 @@ function input(record, key, labelText, type = "text") {
 }
 function rememberSelection(field) {
   const selection = window.getSelection();
-  if (selection?.rangeCount && field.contains(selection.anchorNode)) selectionRange = selection.getRangeAt(0).cloneRange();
+  if (selection?.rangeCount && field.contains(selection.anchorNode) && field.contains(selection.focusNode)) {
+    selectionRange = selection.getRangeAt(0).cloneRange();
+  }
 }
+document.addEventListener("selectionchange", () => {
+  const anchor = window.getSelection()?.anchorNode;
+  const parent = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+  parent?.closest(".rich-editor")?.dispatchEvent(new Event("editor-selection"));
+});
 function restoreSelection(field) {
   field.focus();
   const range = selectionRange && field.contains(selectionRange.commonAncestorContainer)
@@ -94,7 +101,7 @@ export function richEditor(record, key, labelText, options = {}) {
   const wrapper = element("div", "stack");
   const label = element("h3", "", labelText);
   label.id = `label-${record.id}-${key}`;
-  const toolbar = element("div", "cluster formatting");
+  const toolbar = element("div", "stack formatting");
   toolbar.setAttribute("role", "group");
   toolbar.setAttribute("aria-label", `${labelText} formatting`);
   const field = element("div", "box stack rich-editor");
@@ -103,12 +110,40 @@ export function richEditor(record, key, labelText, options = {}) {
   field.setAttribute("aria-multiline", "true");
   field.setAttribute("aria-labelledby", label.id);
   field.innerHTML = sanitize(record[key]);
+  const marks = element("div", "cluster formatting-marks");
+  const mediaActions = element("div", "cluster media-actions");
+  const markControls = [];
+  const refreshMarks = () => {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !field.contains(selection.anchorNode)) return;
+    rememberSelection(field);
+    for (const [control, command] of markControls) {
+      control.setAttribute("aria-pressed", String(document.queryCommandState(command)));
+    }
+  };
+  let emphasizeTyping = false;
+  const semanticEmphasis = () => {
+    const selection = window.getSelection();
+    const anchor = selection.anchorNode, focus = selection.focusNode;
+    const anchorOffset = selection.anchorOffset, focusOffset = selection.focusOffset;
+    const replacements = new Map();
+    field.querySelectorAll("i").forEach((italic) => {
+      const em = document.createElement("em");
+      em.append(...italic.childNodes);
+      italic.replaceWith(em);
+      replacements.set(italic, em);
+    });
+    if (replacements.size && anchor && focus) selection.setBaseAndExtent(replacements.get(anchor) ?? anchor, anchorOffset,
+      replacements.get(focus) ?? focus, focusOffset);
+  };
   const update = () => { record[key] = sanitize(field.innerHTML); onChange(record[key]); };
-  const format = (command, value) => {
+  const format = (command, value, emphasis = false) => {
     restoreSelection(field);
     document.execCommand("styleWithCSS", false, false);
     document.execCommand(command, false, value);
-    update(); rememberSelection(field);
+    if (command === "italic") emphasizeTyping = emphasis && document.queryCommandState("italic");
+    if (emphasizeTyping) semanticEmphasis();
+    update(); refreshMarks();
   };
   const block = document.createElement("select");
   block.setAttribute("aria-label", "Paragraph or heading");
@@ -117,28 +152,24 @@ export function richEditor(record, key, labelText, options = {}) {
   }
   block.addEventListener("pointerdown", () => rememberSelection(field));
   block.addEventListener("change", () => format("formatBlock", block.value));
-  toolbar.append(block);
-  for (const [text, command, value] of [
-    ["Bold", "bold"], ["Italic", "italic"], ["Strike", "strikeThrough"], ["Underline", "underline"],
-    ["Bullets", "insertUnorderedList"], ["Numbers", "insertOrderedList"], ["Quote", "formatBlock", "blockquote"],
+  for (const [text, short, command, value] of [
+    ["Bold", "B", "bold"], ["Italic", "I", "italic"], ["Strike", "S", "strikeThrough"], ["Underline", "U", "underline"],
+    ["Emphasis", "Em", "italic"], ["Bullets", "Bullets", "insertUnorderedList"],
+    ["Numbers", "Numbers", "insertOrderedList"], ["Quote", "Quote", "formatBlock", "blockquote"],
   ]) {
-    const control = button(text, () => format(command, value));
+    const control = button(short, () => format(command, value, text === "Emphasis"));
+    control.setAttribute("aria-label", text);
+    control.title = text;
+    if (["bold", "italic", "strikeThrough", "underline"].includes(command)) {
+      control.setAttribute("aria-pressed", "false");
+      markControls.push([control, command]);
+    }
     control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
-    toolbar.append(control);
+    marks.append(control);
   }
-  const emphasis = button("Emphasis", () => {
-    const range = restoreSelection(field);
-    const em = document.createElement("em");
-    em.append(range.extractContents());
-    if (!em.textContent) em.textContent = "emphasis";
-    range.insertNode(em);
-    range.selectNodeContents(em);
-    update(); rememberSelection(field);
-  });
-  emphasis.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
-  toolbar.append(emphasis);
+  marks.append(block);
   for (const kind of ["image", "video"]) {
-    const control = button(kind === "image" ? "Phone image" : "Phone video", async () => {
+    const control = button(kind === "image" ? "Image" : "Video", async () => {
       rememberSelection(field);
       control.disabled = true;
       try {
@@ -178,13 +209,16 @@ export function richEditor(record, key, labelText, options = {}) {
         update();
       } finally { control.disabled = false; }
     });
+    control.setAttribute("aria-label", kind === "image" ? "Phone image" : "Phone video");
     control.disabled = !native;
     control.addEventListener("pointerdown", () => rememberSelection(field));
-    toolbar.append(control);
+    mediaActions.append(control);
   }
-  field.addEventListener("input", update);
-  field.addEventListener("keyup", () => rememberSelection(field));
-  field.addEventListener("pointerup", () => rememberSelection(field));
+  toolbar.append(mediaActions, marks);
+  field.addEventListener("input", () => { if (emphasizeTyping) semanticEmphasis(); update(); refreshMarks(); });
+  field.addEventListener("editor-selection", refreshMarks);
+  field.addEventListener("keyup", refreshMarks);
+  field.addEventListener("pointerup", () => { emphasizeTyping = false; refreshMarks(); });
   field.addEventListener("blur", () => { record[key] = sanitize(field.innerHTML); });
   field.addEventListener("paste", (event) => {
     event.preventDefault();
@@ -288,7 +322,18 @@ function renderEditor() {
   const { record, kind } = entry;
   form.append(element("h2", "", kind === "page" ? "Edit page" : "Edit news"),
     input(record, "title", "Title"));
-  if (kind === "page") form.append(input(record, "menuTitle", "Menu title"));
+  if (kind === "page") {
+    form.append(input(record, "menuTitle", "Menu title"));
+    const label = element("label", "stack", "Page layout");
+    const layout = document.createElement("select");
+    layout.setAttribute("aria-label", "Page layout");
+    for (const entry of catalog.templates.filter((item) => item.pageLayout === true)) {
+      const option = element("option", "", entry.title); option.value = entry.id; layout.append(option);
+    }
+    layout.value = record.templateId ?? "page";
+    layout.addEventListener("change", () => { record.templateId = layout.value; changed(); });
+    label.append(layout); form.append(label);
+  }
   const routeNotice = element("p", "", `URL: ${entry.route}`);
   routeNotice.id = "selected-route";
   form.append(input(record, "slug", "Slug"), input(record, "date", "Date", "date"),

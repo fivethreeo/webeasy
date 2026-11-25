@@ -57,9 +57,11 @@ export function normalizeProject(input, sanitize) {
       const pageSlug = slug(page);
       if (slugs.has(pageSlug) || (root && reserved.has(pageSlug))) throw new Error(`Duplicate or reserved page slug: ${pageSlug}`);
       slugs.add(pageSlug);
+      const templateId = page.templateId === undefined ? "page" : text(page, "templateId", true);
+      if (!/^[a-z][a-z0-9-]*$/.test(templateId)) throw new Error("Invalid page layout ID.");
       return {
         id: identity(page), title: text(page, "title", true), menuTitle: text(page, "menuTitle", true),
-        slug: pageSlug, content: sanitize(text(page, "content")), date: date(page),
+        templateId, slug: pageSlug, content: sanitize(text(page, "content")), date: date(page),
         sections: sections(page), asides: asides(page), children: pages(list(page, "children")),
       };
     });
@@ -138,6 +140,13 @@ export function renderSite(project, catalog) {
     if (!source) throw new Error(`Template is missing: ${id}`);
     return source;
   };
+  const pageTemplate = (record) => {
+    const id = record.templateId ?? "page";
+    if (id !== "page" && !catalog.templates.some((entry) => entry.id === id && entry.pageLayout === true)) {
+      throw new Error(`Unavailable page layout: ${id}`);
+    }
+    return template(id);
+  };
   const navigation = `<nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages)}
     <li><a href="news/">News</a></li></ul></nav>`;
   const files = [];
@@ -159,7 +168,7 @@ export function renderSite(project, catalog) {
         `<li><a href="${page.ancestors.slice(0, index + 1).map((item) => item.slug).join("/")}/">${escapeHtml(ancestor.menuTitle)}</a></li>`).join("")
         }<li>${escapeHtml(page.record.menuTitle)}</li></ol></nav>` : "";
     files.push({ path: file, html: document(page.record.title,
-      breadcrumbs + render(template("page"), page.record, body(page.record, catalog)), file) });
+      breadcrumbs + render(pageTemplate(page.record), page.record, body(page.record, catalog)), file) });
   }
   const news = sortedNews(project.news);
   for (const item of news) {
@@ -173,7 +182,7 @@ export function renderSite(project, catalog) {
   const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
   files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
   const homepage = project.pages.length
-    ? render(template("page"), project.pages[0], body(project.pages[0], catalog)) : listing;
+    ? render(pageTemplate(project.pages[0]), project.pages[0], body(project.pages[0], catalog)) : listing;
   files.push({ path: "index.html", html: document(project.pages[0]?.title ?? "News", homepage, "index.html") });
   return files;
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { connectionPayload } from "../src/connection.mjs";
+import { connectionPayload, readConnectionQR } from "../src/connection.mjs";
 
 const example = {
   protocol: "sftp",
@@ -34,4 +34,16 @@ test("rejects malformed hosts, ports, credentials, paths, and excessive QR paylo
   ]) {
     assert.throws(() => connectionPayload({ ...example, ...fields }));
   }
+});
+
+test("QR imports round-trip exact passwords and reject wrong envelopes and invalid types", () => {
+  const payload = JSON.parse(connectionPayload(example));
+  assert.equal(readConnectionQR(JSON.stringify(payload)).password, example.password);
+  for (const input of [
+    "not JSON", "null", JSON.stringify({ ...payload, version: 2 }),
+    JSON.stringify({ ...payload, kind: "other" }),
+    JSON.stringify({ ...payload, connection: { ...payload.connection, port: "22" } }),
+    JSON.stringify({ ...payload, connection: { ...payload.connection, host: 123 } }),
+    JSON.stringify({ ...payload, connection: { ...payload.connection, password: "x".repeat(2000) } }),
+  ]) assert.throws(() => readConnectionQR(input));
 });

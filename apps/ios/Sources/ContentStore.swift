@@ -43,15 +43,16 @@ final class ContentStore: @unchecked Sendable {
         do {
             try execute("PRAGMA foreign_keys = ON")
             let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
-            guard version == 0 || version == 1 else {
+            guard (0...2).contains(version) else {
                 throw ContentError.invalid("A database migration is required. Your content has not been deleted.")
             }
             try transaction {
                 if version == 0 {
                     let schema = try String(contentsOf: bundled.appendingPathComponent("storage.sql"), encoding: .utf8)
                     guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { throw databaseError() }
-                    try execute("PRAGMA user_version = 1")
                 }
+                if version == 1 { try execute("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'") }
+                if version < 2 { try execute("PRAGMA user_version = 2") }
                 if try rows("SELECT value FROM metadata WHERE key = ?", ["seeded"]).isEmpty {
                     let data = try Data(contentsOf: bundled.appendingPathComponent("content.json"))
                     guard let seed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -176,15 +177,21 @@ final class ContentStore: @unchecked Sendable {
         for (position, page) in pages.enumerated() {
             let id = try identity(page)
             let slug = try text(page, "slug", required: true)
+            let templateID: String
+            if page["templateId"] == nil { templateID = "page" }
+            else { templateID = try text(page, "templateId", required: true) }
+            guard templateID.range(of: "^[a-z][a-z0-9-]*$", options: .regularExpression) != nil else {
+                throw ContentError.invalid("Invalid page layout ID.")
+            }
             guard slug.range(of: "^[a-z0-9]+(?:-[a-z0-9]+)*$", options: .regularExpression) != nil else {
                 throw ContentError.invalid("Invalid slug.")
             }
             if parent == nil && ["news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"].contains(slug) {
                 throw ContentError.invalid("Reserved page slug.")
             }
-            try execute("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            try execute("INSERT INTO pages (id, parent_id, title, menu_title, template_id, slug, content, date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         [id, parent, try text(page, "title", required: true), try text(page, "menuTitle", required: true),
-                         slug, try text(page, "content"), try text(page, "date", required: true), position])
+                         templateID, slug, try text(page, "content"), try text(page, "date", required: true), position])
             try writeRelated(page, owner: "page", id: id)
             try writePages(list(page, "children"), parent: id)
         }
@@ -225,7 +232,7 @@ final class ContentStore: @unchecked Sendable {
     }
 
     private func pages(parent: String?) throws -> [[String: Any]] {
-        let sql = "SELECT id, title, menu_title AS menuTitle, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
+        let sql = "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
         return try rows(sql, parent.map { [$0] } ?? []).map { original in
             var page = try related(original, owner: "page")
             page["children"] = try pages(parent: text(page, "id", required: true))

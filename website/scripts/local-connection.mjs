@@ -1,8 +1,22 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { isIP } from "node:net";
 import QRCode from "qrcode";
 import { escapeHtml } from "./catalog.mjs";
 import { connectionPayload } from "../src/connection.mjs";
+
+function privateClient(address) {
+  if (isIP(address) === 4) {
+    const [first, second] = address.split(".").map(Number);
+    return first === 127 || first === 10 || (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) || (first === 169 && second === 254);
+  }
+  if (isIP(address) === 6) {
+    const first = Number.parseInt(address.split(":")[0], 16);
+    return address === "::1" || (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+  }
+  return false;
+}
 
 export function localConnectionMiddleware(file) {
   return async (request, response, next) => {
@@ -18,17 +32,18 @@ export function localConnectionMiddleware(file) {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
     response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    response.setHeader("Referrer-Policy", "no-referrer");
     const host = request.headers.host;
     const localAddress = request.socket.localAddress?.replace(/^::ffff:/, "");
     const remoteAddress = request.socket.remoteAddress?.replace(/^::ffff:/, "");
-    const localClient = ["127.0.0.1", "::1", localAddress].includes(remoteAddress);
+    const localClient = typeof remoteAddress === "string" && (remoteAddress === localAddress || privateClient(remoteAddress));
     const validHost = ["127.0.0.1", "localhost", localAddress]
-      .map((address) => `${address}:${request.socket.localPort}`).includes(host);
+      .filter(Boolean).map((address) => `${address.includes(":") ? `[${address}]` : address}:${request.socket.localPort}`).includes(host);
     const origin = request.headers.origin;
     if (request.method !== "GET" || !validHost || !localClient ||
         (!page && !image && request.headers["x-webeasy-setup"] !== "1") ||
         (origin && origin !== `http://${host}`)) {
-      response.writeHead(403).end(JSON.stringify({ error: "Local setup requests only." }));
+      response.writeHead(403).end(JSON.stringify({ error: "Private LAN setup requests only." }));
       return;
     }
     let template;

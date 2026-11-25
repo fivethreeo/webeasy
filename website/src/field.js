@@ -18,6 +18,13 @@ window.WebeasyField = {
   },
 };
 window.WebeasyField.setValue("");
+const viewport = () => {
+  document.documentElement.style.setProperty("--editor-visible-top", `${window.visualViewport?.offsetTop ?? 0}px`);
+  document.documentElement.style.setProperty("--editor-visible-height", `${window.visualViewport?.height ?? innerHeight}px`);
+};
+window.visualViewport?.addEventListener("resize", viewport);
+window.visualViewport?.addEventListener("scroll", viewport);
+viewport();
 new ResizeObserver(() => {
   send("resize", { height: Math.ceil(document.body.getBoundingClientRect().height) + 8 });
 }).observe(document.body);

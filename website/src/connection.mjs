@@ -9,6 +9,7 @@ export function connectionPayload(fields) {
   if (!host || /[\s/\\?#@]/.test(host) || host.includes("://")) {
     throw new Error("Enter a hostname or IP address, not a URL.");
   }
+
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Port must be between 1 and 65535.");
   if (!username || /[\r\n\0]/.test(username)) throw new Error("Enter a valid username.");
   if (typeof password !== "string" || !password || /[\r\n\0]/.test(password)) {
@@ -27,4 +28,16 @@ export function connectionPayload(fields) {
     throw new Error("Connection details are too long for a reliably scannable QR code.");
   }
   return payload;
+}
+
+export function readConnectionQR(serialized) {
+  const invalid = () => new Error("Choose a picture containing one Webeasy hosting setup QR.");
+  if (typeof serialized !== "string" || new TextEncoder().encode(serialized).length > 1800) throw invalid();
+  let payload;
+  try { payload = JSON.parse(serialized); } catch { throw invalid(); }
+  const connection = payload?.connection;
+  if (payload?.version !== 1 || payload?.kind !== "webeasy-publish" || !connection ||
+      typeof connection.port !== "number" ||
+      !["host", "username", "password", "directory"].every((key) => typeof connection[key] === "string")) throw invalid();
+  return JSON.parse(connectionPayload(connection)).connection;
 }

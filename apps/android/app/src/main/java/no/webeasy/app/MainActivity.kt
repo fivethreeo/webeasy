@@ -28,6 +28,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.webkit.WebViewAssetLoader
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -54,8 +58,11 @@ class MainActivity : ComponentActivity() {
     private var tab by mutableIntStateOf(0)
     private val screens = mutableStateListOf<Screen>()
     private var pendingMedia: PendingMedia? = null
+    private val hosting by lazy { HostingCredentials(this) }
+    private var hostingStatus by mutableStateOf("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
 
-    private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null)
+    private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null,
+                              val contentKey: String? = null)
     private data class PendingMedia(val id: String, val kind: String, val view: WebView)
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -75,7 +82,42 @@ class MainActivity : ComponentActivity() {
                     project?.getJSONArray("media")?.put(media)
                     respond(pending.view, pending.id, media)
                 }
+
             }, onFailure = { respond(pending.view, pending.id, error = it.message ?: "Cannot import media.") })
+        }
+    }
+
+    private val qrPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            runCatching { InputImage.fromFilePath(this, uri) }
+                .onSuccess(::readQR).onFailure { hostingStatus = "Cannot read this picture." }
+        }
+    }
+    private val qrCamera = registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { image ->
+        if (image != null) readQR(InputImage.fromBitmap(image, 0))
+    }
+
+    private fun readQR(image: InputImage) {
+        hostingStatus = "Reading QR on this phone..."
+        val scanner = BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+        scanner.process(image).addOnSuccessListener(this) { codes ->
+            val code = codes.singleOrNull()?.rawValue
+            if (code == null) hostingStatus = "Choose a picture containing one Webeasy hosting setup QR."
+            else importHostingQR(code)
+        }.addOnFailureListener(this) { hostingStatus = "Cannot read this QR picture." }
+            .addOnCompleteListener { scanner.close() }
+    }
+    private fun importHostingQR(code: String) {
+        if (!ready) { hostingStatus = "Wait for the app to finish opening, then try again."; return }
+        generator.evaluateJavascript("window.WebeasyGenerator.readConnection(${JSONObject.quote(code)})") { serialized ->
+            val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }.getOrNull()
+            val connection = output?.optJSONObject("connection")
+            if (connection == null) { hostingStatus = output?.optString("error") ?: "Cannot read this hosting QR."; return@evaluateJavascript }
+            worker.execute {
+                runCatching { hosting.save(connection) }.fold(
+                    onSuccess = { runOnUiThread { hostingStatus = "Saved hosting: ${connection.getString("host")}. Not connected yet." } },
+                    onFailure = { runOnUiThread { hostingStatus = "Cannot save hosting securely." } })
+            }
         }
     }
 
@@ -92,6 +134,9 @@ class MainActivity : ComponentActivity() {
             }.fold(onSuccess = { (content, examples) -> runOnUiThread {
                 project = content; catalog = examples; status = "Local SQLite. Save changes before closing."
             } }, onFailure = { runOnUiThread { status = it.message ?: "Cannot open local storage." } })
+            runCatching { hosting.load()?.getString("host") }.getOrNull()?.let { host ->
+                runOnUiThread { hostingStatus = "Saved hosting: $host." }
+            }
         }
         setContent {
             MaterialTheme {
@@ -105,10 +150,13 @@ class MainActivity : ComponentActivity() {
                         })
                 }) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
-                        Text(status, Modifier.padding(16.dp))
                         val screen = screens.lastOrNull()
+                        if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
                         when {
                             screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
+                            screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
+                                RichField(screen.record, screen.contentKey)
+                            }
                             screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
                             else -> RootList(revision)
                         }
@@ -136,9 +184,29 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
         ScrollableTabRow(selectedTabIndex = tab) {
-            listOf("Pages", "News", "Templates", "Building blocks").forEachIndexed { index, name ->
+            listOf("Pages", "News", "Templates", "Building blocks", "Hosting").forEachIndexed { index, name ->
                 Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
             }
+        }
+        if (tab == 4) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(hostingStatus)
+                Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                    Text("Read QR from picture")
+                }
+                Button(onClick = { runCatching { qrCamera.launch(null) }.onFailure { hostingStatus = "Camera is unavailable." } }) {
+                    Text("Take a QR picture")
+                }
+                TextButton(onClick = {
+                    worker.execute {
+                        runCatching { hosting.remove() }.fold(
+                            onSuccess = { runOnUiThread { hostingStatus = "Hosting credentials removed." } },
+                            onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
+                    }
+                }) { Text("Forget hosting") }
+                Text("Credentials are encrypted with Android Keystore. Connecting and publishing from the app are not implemented yet.")
+            }
+            return
         }
         val source = if (tab < 2) project else catalog
         val key = listOf("pages", "news", "templates", "components")[tab]
@@ -185,16 +253,28 @@ class MainActivity : ComponentActivity() {
     private fun RecordForm(screen: Screen, @Suppress("UNUSED_PARAMETER") revision: Int) {
         val record = screen.record!!
         var dateDialog by remember(record.getString("id")) { mutableStateOf(false) }
+        var layoutDialog by remember(record.getString("id")) { mutableStateOf(false) }
+        val layouts = catalog?.getJSONArray("templates")?.records()?.filter { it.optBoolean("pageLayout") } ?: emptyList()
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (screen.kind in listOf("page", "news")) {
                 item { NativeText(record, "title", "Title") }
-                if (screen.kind == "page") item { NativeText(record, "menuTitle", "Menu title") }
+                if (screen.kind == "page") {
+                    item { NativeText(record, "menuTitle", "Menu title") }
+                    item {
+                        val selected = record.optString("templateId", "page")
+                        TextButton(onClick = { layoutDialog = true }) {
+                            Text("Page layout: ${layouts.find { it.getString("id") == selected }?.getString("title") ?: selected}")
+                        }
+                    }
+                }
                 item { NativeText(record, "slug", "Slug") }
                 item { TextButton(onClick = { dateDialog = true }) { Text("Date: ${record.getString("date")}") } }
             } else item { NativeText(record, "heading", if (screen.kind == "aside") "Heading (optional)" else "Heading") }
             item {
                 Text(if (screen.kind == "news") "Short content" else "Content")
-                RichField(record, if (screen.kind == "news") "shortContent" else "content")
+                OutlinedButton(onClick = {
+                    screens.add(Screen("content", record, contentKey = if (screen.kind == "news") "shortContent" else "content"))
+                }) { Text(if (screen.kind == "news") "Edit short content" else "Edit content") }
             }
             val related = buildList {
                 if (screen.kind in listOf("page", "news")) add(Triple("sections", "Sections", "section"))
@@ -215,6 +295,15 @@ class MainActivity : ComponentActivity() {
                 TextButton(onClick = { generate(true, path = if (screen.kind == "news")
                     "news/${record.getString("date")}/${record.getString("slug")}/index.html" else pagePath(record.getString("id"))) }) { Text("Preview") }
             }
+        }
+        if (layoutDialog) {
+            AlertDialog(onDismissRequest = { layoutDialog = false }, title = { Text("Page layout") },
+                text = { Column { layouts.forEach { layout ->
+                    TextButton(onClick = { record.put("templateId", layout.getString("id")); changed(); layoutDialog = false }) {
+                        Text(layout.getString("title"))
+                    }
+                } } },
+                confirmButton = { TextButton(onClick = { layoutDialog = false }) { Text("Cancel") } })
         }
         if (dateDialog) {
             val dateState = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(record.getString("date")).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
@@ -280,10 +369,9 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun RichField(record: JSONObject, key: String) {
-        var height by remember(record.getString("id"), key) { mutableStateOf(400f) }
-        AndroidView(modifier = Modifier.fillMaxWidth().height(height.dp), factory = {
+        AndroidView(modifier = Modifier.fillMaxSize(), factory = {
             localWebView().apply {
-                val bridge = FieldBridge(this, record, key) { height = it }
+                val bridge = FieldBridge(this, record, key)
                 tag = bridge
                 addJavascriptInterface(bridge, "WebeasyNative")
                 loadUrl("$base/assets/website/field.html")
@@ -294,7 +382,7 @@ class MainActivity : ComponentActivity() {
         }, onRelease = { it.removeJavascriptInterface("WebeasyNative"); it.destroy() })
     }
 
-    private inner class FieldBridge(val view: WebView, val record: JSONObject, val key: String, val resize: (Float) -> Unit) {
+    private inner class FieldBridge(val view: WebView, val record: JSONObject, val key: String) {
         var ready = false
         var value = ""
         fun pushValue(content: String) { value = content; view.evaluateJavascript("window.WebeasyField.setValue(${JSONObject.quote(content)});", null) }
@@ -306,7 +394,7 @@ class MainActivity : ComponentActivity() {
                 when (message.optString("method")) {
                     "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id) }
                     "change" -> { value = payload.getString("content"); record.put(key, value); changed(); respond(view, id) }
-                    "resize" -> { val height = payload.optDouble("height"); if (height.isFinite()) resize(maxOf(200f, height.toFloat())); respond(view, id) }
+                    "resize" -> respond(view, id)
                     "pickMedia" -> {
                         val kind = payload.optString("kind")
                         if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")

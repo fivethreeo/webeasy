@@ -25,4 +25,5 @@ struct CatalogEntry: Decodable, Identifiable {
     let title: String
     let description: String
     let preview: String
+    let pageLayout: Bool?
 }

@@ -99,4 +99,32 @@ class ContentStoreTest {
             assertThrows(IllegalArgumentException::class.java) { ContentStore.safeFile(store.mediaDirectory, path) }
         }
     }
+
+    @Test
+    fun versionOneMigrationPreservesPagesAndLayoutChoicesPersistOnReopen() {
+        store.close()
+        context.deleteDatabase("webeasy.sqlite")
+        val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
+        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+            .replace("    template_id TEXT NOT NULL DEFAULT 'page',\n", "")
+        schema.split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
+        old.execSQL("INSERT INTO metadata (key, value) VALUES ('seeded', '1')")
+        old.execSQL("INSERT INTO pages (id, title, menu_title, slug, content, date, position) VALUES ('legacy', 'Old page', 'Old page', 'legacy', '<p>Keep me</p>', '2026-11-01', 0)")
+        old.execSQL("INSERT INTO pages (id, parent_id, title, menu_title, slug, content, date, position) VALUES ('legacy-child', 'legacy', 'Child', 'Child', 'child', '<p>Child content</p>', '2026-11-01', 0)")
+        old.version = 1
+        old.close()
+        store = ContentStore(context)
+        val project = store.project()
+        assertEquals(1, project.getJSONArray("pages").length())
+        val page = project.getJSONArray("pages").getJSONObject(0)
+        assertEquals("Keep me", page.getString("content").replace(Regex("<[^>]+>"), ""))
+        assertEquals("page", page.getString("templateId"))
+        assertEquals("page", page.getJSONArray("children").getJSONObject(0).getString("templateId"))
+        page.put("templateId", "reading-page")
+        store.save(project)
+        store.close()
+        store = ContentStore(context)
+        assertEquals("reading-page", store.project().getJSONArray("pages").getJSONObject(0).getString("templateId"))
+        assertEquals(2, store.readableDatabase.version)
+    }
 }

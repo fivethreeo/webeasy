@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 @MainActor
 struct NativeRichField: UIViewRepresentable {
     @Binding var content: String
-    @Binding var height: CGFloat
     let model: NativeEditorModel
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -15,7 +14,7 @@ struct NativeRichField: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
         configuration.userContentController.add(context.coordinator, name: "webeasy")
         let view = WKWebView(frame: .zero, configuration: configuration)
-        view.scrollView.isScrollEnabled = false
+        view.scrollView.isScrollEnabled = true
         view.navigationDelegate = context.coordinator
         context.coordinator.view = view
         if let store = model.store { view.loadFileURL(store.websiteRoot.appendingPathComponent("field.html"), allowingReadAccessTo: store.websiteRoot) }
@@ -70,9 +69,7 @@ struct NativeRichField: UIViewRepresentable {
             case "change":
                 if let content = payload["content"] as? String { value = content; parent.content = content }
                 send(id)
-            case "resize":
-                if let height = payload["height"] as? Double, height.isFinite { parent.height = CGFloat(max(200, height)) }
-                send(id)
+            case "resize": send(id)
             case "pickMedia":
                 guard pending == nil, let kind = payload["kind"] as? String, ["image", "video"].contains(kind),
                       let rootController = view?.window?.rootViewController else { send(id, NSNull(), "Cannot open media picker."); return }

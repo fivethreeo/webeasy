@@ -68,6 +68,7 @@ test("phone image/video imports become figures with captions and exportable rela
   const video = page.locator(".rich-editor").first().locator("figure video");
   await expect(video.locator("source")).toHaveAttribute("src", "media/native-test.mp4");
   await expect(video).toHaveAttribute("controls", "");
+  await video.scrollIntoViewIfNeeded();
   await video.evaluate(async (video) => { video.muted = true; await video.play(); });
   await expect.poll(() => video.evaluate((video) => video.readyState)).toBeGreaterThanOrEqual(2);
   await page.getByRole("button", { name: "Export website", exact: true }).click();
@@ -95,12 +96,12 @@ test("latest news renders three articles and editor/aside layouts reflow at enla
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
-test("native embed exposes only a rich-text field, reports edits/height, and formats text", async ({ page }) => {
-  await page.addInitScript(({ photoSize, videoSize }) => {
+async function openField(page, content = "<p>Hello from the phone</p>") {
+  await page.addInitScript(({ photoSize, videoSize, content }) => {
     window.WebeasyNative = {
       request(serialized) {
         const { id, method, payload } = JSON.parse(serialized);
-        if (method === "ready") window.WebeasyField.setValue("<p>Hello from the phone</p>");
+        if (method === "ready") window.WebeasyField.setValue(content);
         if (method === "change") window.__content = payload.content;
         if (method === "resize") window.__fieldHeight = payload.height;
         const result = method === "pickMedia" ? (payload.kind === "image"
@@ -109,10 +110,14 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
         queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
       },
     };
-  }, { photoSize: photo.length, videoSize: clip.length });
+  }, { photoSize: photo.length, videoSize: clip.length, content });
   await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
+}
+
+test("native embed exposes only a rich-text field, reports edits/height, and formats text", async ({ page }) => {
+  await openField(page);
   const field = page.getByRole("textbox", { name: "Content", exact: true });
   await expect(field).toHaveText("Hello from the phone");
   await expect(page.getByLabel("Title", { exact: true })).toHaveCount(0);
@@ -140,6 +145,54 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
 });
 
+test("inline marks toggle on the selected word and emphasis works at the caret", async ({ page }) => {
+  await openField(page, "<p>alpha beta gamma</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.evaluate((field) => {
+    field.focus();
+    const text = field.querySelector("p").firstChild;
+    getSelection().setBaseAndExtent(text, 6, text, 10);
+  });
+  const bold = page.getByRole("button", { name: "Bold", exact: true });
+  await bold.click();
+  await expect(field.locator("b,strong")).toHaveText("beta");
+  await expect(bold).toHaveAttribute("aria-pressed", "true");
+  await bold.click();
+  await expect(field.locator("b,strong")).toHaveCount(0);
+  const emphasis = page.getByRole("button", { name: "Emphasis", exact: true });
+  await emphasis.click();
+  await expect(field.locator("em")).toHaveText("beta");
+  await emphasis.click();
+  await expect(field.locator("em,i")).toHaveCount(0);
+  await expect(field).toHaveText("alpha beta gamma");
+  await field.evaluate((field) => {
+    field.focus();
+    const text = field.querySelector("p").lastChild;
+    getSelection().setBaseAndExtent(text, text.length, text, text.length);
+  });
+  await emphasis.click();
+  await page.keyboard.type(" typed");
+  await expect(field.locator("em")).toContainText("typed");
+  await expect(field).toHaveText("alpha beta gamma typed");
+});
+
+test("SE-sized keyboard viewport keeps media actions reachable after scrolling long content", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 240 });
+  await openField(page, Array.from({ length: 30 }, (_, i) => `<p>Long content paragraph ${i}</p>`).join(""));
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.locator("p").last().scrollIntoViewIfNeeded();
+  for (const name of ["Phone image", "Phone video"]) {
+    const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(240);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("Caption (optional)").fill("SE photo");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("figure img")).toHaveAttribute("src", "media/native-test.png");
+});
+
 test("native generation engine normalizes content and renders portable website files", async ({ page }) => {
   await page.goto("/generator.html");
   const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
@@ -152,4 +205,31 @@ test("native generation engine normalizes content and renders portable website f
     version: 1, pages: [{ id: "invalid", title: "Bad slug", slug: "../escape", date: "2026-01-01" }], news: [], media: [],
   }))));
   expect(invalid.error).toBeTruthy();
+});
+
+test("hosting QR import validates the envelope and preserves credentials without putting them in content", async ({ page }) => {
+  await page.goto("/generator.html");
+  const result = await page.evaluate(() => {
+    const connection = { protocol: "sftp", host: "example.test", port: 22, username: "editor", password: " test password ", directory: "/site" };
+    const read = (payload) => JSON.parse(window.WebeasyGenerator.readConnection(JSON.stringify(payload)));
+    return {
+      valid: read({ kind: "webeasy-publish", version: 1, connection }),
+      future: read({ kind: "webeasy-publish", version: 2, connection }),
+      wrong: read({ kind: "other", version: 1, connection }),
+      unsafe: read({ kind: "webeasy-publish", version: 1, connection: { ...connection, directory: "/../secret" } }),
+    };
+  });
+  expect(result.valid.connection.password).toBe(" test password ");
+  expect(result.valid.project).toBeUndefined();
+  for (const key of ["future", "wrong", "unsafe"]) expect(result[key].error).toBeTruthy();
+});
+
+test("Rsbuild page layouts are selectable, saved and used by previews", async ({ page }) => {
+  await openEditor(page);
+  await page.getByLabel("Page layout", { exact: true }).selectOption("landing-page");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].templateId)).toBe("landing-page");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.locator("#preview .landing-layout")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

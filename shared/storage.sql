@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS pages (
     parent_id TEXT REFERENCES pages(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     menu_title TEXT NOT NULL,
+    template_id TEXT NOT NULL DEFAULT 'page',
     slug TEXT NOT NULL,
     content TEXT NOT NULL,
     date TEXT NOT NULL,

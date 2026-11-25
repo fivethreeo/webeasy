@@ -31,8 +31,10 @@ test("native packages contain the entire generated site byte-for-byte", async ()
   assert.ok(!expected.includes("assets/provision.js"));
   assert.ok(!expected.includes("assets/provision.css"));
   for (const file of expected.filter((name) => /\.(html|js|json)$/.test(name))) {
-    assert.ok(!(await readFile(path.join(source, file), "utf8")).includes("webeasy-publish"),
-      `${file} unexpectedly contains provisioning code`);
+    const text = await readFile(path.join(source, file), "utf8");
+    assert.ok(!text.includes("__WebeasyLocalConnection"), `${file} unexpectedly contains local provisioning data`);
+    assert.ok(!text.includes("webeasy-publish") || file === "assets/generator.js",
+      `${file} unexpectedly contains QR generation code`);
   }
   for (const target of [
     "apps/ios/Resources/Website",

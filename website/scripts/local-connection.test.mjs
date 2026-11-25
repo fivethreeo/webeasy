@@ -64,7 +64,7 @@ test("local JSON is available only through guarded setup requests and errors do 
   }
 });
 
-test("a remote LAN client cannot obtain credentials by spoofing this machine's Host header", async () => {
+test("public clients cannot obtain credentials by spoofing local Host or forwarded headers", async () => {
   let status;
   const response = {
     setHeader() {},
@@ -75,9 +75,30 @@ test("a remote LAN client cannot obtain credentials by spoofing this machine's H
     await localConnectionMiddleware("/unused-local-file")({
       url,
       method: "GET",
-      headers: { host: "192.168.1.2:4173", "x-webeasy-setup": "1" },
-      socket: { localPort: 4173, localAddress: "192.168.1.2", remoteAddress: "192.168.1.99" },
+      headers: { host: "192.168.1.2:4173", "x-webeasy-setup": "1", "x-forwarded-for": "192.168.1.99" },
+      socket: { localPort: 4173, localAddress: "192.168.1.2", remoteAddress: "203.0.113.99" },
     }, response, () => assert.fail("Unexpected middleware fallthrough"));
     assert.equal(status, 403);
   }
+});
+
+test("private LAN clients can view setup while public IPv4 and IPv6 clients stay blocked", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "webeasy-lan-"));
+  const file = path.join(directory, "hosting.local.json");
+  await writeFile(file, JSON.stringify({ protocol: "ftp", host: "192.168.1.2", port: 2121,
+    username: "test", password: "example-only", directory: "/" }));
+  try {
+    for (const [address, expected] of [
+      ["192.168.1.99", 200], ["::ffff:192.168.1.99", 200], ["10.0.0.4", 200], ["172.16.0.5", 200],
+      ["fd12::4", 200], ["fe80::4", 200], ["172.32.0.5", 403], ["8.8.8.8", 403], ["2001:db8::4", 403],
+    ]) {
+      let status;
+      const response = { setHeader() {}, writeHead(value) { status = value; return this; }, end() {} };
+      await localConnectionMiddleware(file)({
+        url: "/provision.html", method: "GET", headers: { host: "192.168.1.2:4173" },
+        socket: { localPort: 4173, localAddress: "192.168.1.2", remoteAddress: address },
+      }, response, () => assert.fail("Unexpected middleware fallthrough"));
+      assert.equal(status, expected, address);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
