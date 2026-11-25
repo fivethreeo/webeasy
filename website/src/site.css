@@ -57,6 +57,11 @@ body {
   list-style: none;
 }
 
+.site-menu a.active,
+.subpage-navigation a.active {
+  font-weight: 700;
+}
+
 .grid {
   --min: 14rem;
 }

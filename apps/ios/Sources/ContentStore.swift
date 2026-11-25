@@ -202,6 +202,13 @@ final class ContentStore: @unchecked Sendable {
         try execute("DELETE FROM pages")
         try execute("DELETE FROM news")
         try writePages(list(project, "pages"), parent: nil)
+        try execute("DELETE FROM metadata WHERE key = ?", ["home_page_id"])
+        if let home = project["homePageId"] as? String {
+            guard try !rows("SELECT id FROM pages WHERE id = ?", [home]).isEmpty else {
+                throw ContentError.invalid("Invalid homepage.")
+            }
+            try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ["home_page_id", home])
+        }
         for news in try list(project, "news") {
             let id = try identity(news)
             try execute("INSERT INTO news (id, title, slug, date, short_content) VALUES (?, ?, ?, ?, ?)",
@@ -242,7 +249,10 @@ final class ContentStore: @unchecked Sendable {
 
     func project() throws -> [String: Any] {
         try queue.sync {
-            ["version": 1, "pages": try pages(parent: nil),
+            let records = try pages(parent: nil)
+            let home = try rows("SELECT value FROM metadata WHERE key = ?", ["home_page_id"]).first?["value"] as? String
+                ?? records.first?["id"] as? String
+            return ["version": 1, "homePageId": home.map { $0 as Any } ?? NSNull(), "pages": records,
              "news": try rows("SELECT id, title, slug, date, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
              "media": try rows("SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id")]
         }

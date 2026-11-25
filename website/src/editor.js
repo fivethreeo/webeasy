@@ -348,12 +348,21 @@ function renderEditor() {
     [siblings[index], siblings[next]] = [siblings[next], siblings[index]];
     changed(); renderLists();
   };
-  if (kind === "page") actions.append(button("Move page up", () => move(-1)), button("Move page down", () => move(1)));
+  if (kind === "page") {
+    const home = button("Use as home page", () => {
+      project.homePageId = record.id; changed(); renderEditor();
+    });
+    if (project.homePageId === record.id) { home.textContent = "Current home page"; home.disabled = true; }
+    actions.append(home, button("Move page up", () => move(-1)), button("Move page down", () => move(1)));
+  }
   actions.append(button("Delete this item and its owned content", () => {
     const dialog = document.createElement("dialog");
     dialog.append(element("p", "", "Delete this item, its subpages, sections, and asides?"));
     dialog.append(button("Delete", () => {
       siblings.splice(siblings.indexOf(record), 1);
+      if (!pageRoutes(project.pages).some((entry) => entry.record.id === project.homePageId)) {
+        project.homePageId = project.pages[0]?.id ?? null;
+      }
       selected = project.pages[0]?.id ?? project.news[0]?.id;
       dialog.close(); dialog.remove(); changed(); renderLists(); renderEditor();
     }), button("Cancel", () => { dialog.close(); dialog.remove(); }));

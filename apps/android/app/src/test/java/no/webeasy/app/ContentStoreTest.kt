@@ -127,4 +127,69 @@ class ContentStoreTest {
         assertEquals("reading-page", store.project().getJSONArray("pages").getJSONObject(0).getString("templateId"))
         assertEquals(2, store.readableDatabase.version)
     }
+
+    @Test
+    fun homepageChoiceSurvivesReopenAndInvalidReferencesRollBack() {
+        val project = store.project()
+        val first = project.getJSONArray("pages").getJSONObject(0)
+        assertEquals(first.getString("id"), project.getString("homePageId"))
+        val child = first.getJSONArray("children").getJSONObject(0)
+        project.put("homePageId", child.getString("id"))
+        store.save(project); store.close(); store = ContentStore(context)
+        assertEquals(child.getString("id"), store.project().getString("homePageId"))
+        val invalid = JSONObject(project.toString()).put("homePageId", "missing")
+        assertThrows(Exception::class.java) { store.save(invalid) }
+        assertEquals(child.getString("id"), store.project().getString("homePageId"))
+        first.put("children", JSONArray()); project.put("homePageId", first.getString("id"))
+        store.save(project)
+        assertEquals(first.getString("id"), store.project().getString("homePageId"))
+    }
+
+    @Test
+    fun draftDiscardRestoresOwnedContentInPlaceWithoutChangingOtherDrafts() {
+        val project = store.project()
+        val drafts = ContentDrafts()
+        drafts.markSaved(drafts.capture(project))
+        val page = project.getJSONArray("pages").getJSONObject(0)
+        val child = page.getJSONArray("children").getJSONObject(0)
+        val news = project.getJSONArray("news").getJSONObject(0)
+        assertFalse(drafts.hasChanges(page, project))
+        val title = page.getString("title")
+        page.put("title", "Changed"); page.put("title", title)
+        assertFalse(drafts.hasChanges(page, project))
+        child.put("title", "Nested edit")
+        news.put("title", "Unrelated draft")
+        assertTrue(drafts.hasChanges(page, project))
+        drafts.discard(page, project)
+        assertSame(child, page.getJSONArray("children").getJSONObject(0))
+        assertNotEquals("Nested edit", child.getString("title"))
+        assertEquals("Unrelated draft", news.getString("title"))
+        assertFalse(drafts.hasChanges(page, project))
+        assertTrue(drafts.hasChanges(news, project))
+    }
+
+    @Test
+    fun homepageAndNewRecordDiscardAndCapturedSaveKeepLaterEditsDirty() {
+        val project = store.project()
+        val drafts = ContentDrafts()
+        drafts.markSaved(drafts.capture(project))
+        val page = project.getJSONArray("pages").getJSONObject(0)
+        val child = page.getJSONArray("children").getJSONObject(0)
+        project.put("homePageId", child.getString("id"))
+        assertTrue(drafts.hasChanges(child, project))
+        drafts.discard(child, project)
+        assertEquals(page.getString("id"), project.getString("homePageId"))
+        page.put("title", "Saving this")
+        val snapshot = drafts.capture(project)
+        page.put("title", "Newer edit")
+        drafts.markSaved(snapshot)
+        assertTrue(drafts.hasChanges(page, project))
+        drafts.discard(page, project)
+        assertEquals("Saving this", page.getString("title"))
+        val fresh = JSONObject(page.toString()).put("id", "new-draft")
+        project.getJSONArray("pages").put(fresh)
+        assertTrue(drafts.hasChanges(fresh, project))
+        drafts.discard(fresh, project)
+        assertEquals(1, project.getJSONArray("pages").length())
+    }
 }

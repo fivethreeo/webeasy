@@ -51,7 +51,7 @@ test("edits after repeated saves, nested content, and subpages remain in the sav
   await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].children.at(-1).sections[0].asides[0].content)).toContain("Owned by this section");
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.locator("#preview").getByRole("heading", { name: "A phone subpage", exact: true })).toBeVisible();
-  await expect(page.locator("#preview aside")).toHaveText(/Section note.*Owned by this section/s);
+  await expect(page.locator("#preview .content-asides aside")).toHaveText(/Section note.*Owned by this section/s);
 });
 
 test("phone image/video imports become figures with captions and exportable relative paths", async ({ page }) => {
@@ -94,6 +94,24 @@ test("latest news renders three articles and editor/aside layouts reflow at enla
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("homepage choice persists and submenu aside reflows with active links at enlarged text", async ({ page }) => {
+  await openEditor(page);
+  if (!await page.locator("#content-navigation").evaluate((details) => details.open)) await page.getByText("Choose content", { exact: true }).click();
+  await page.locator("#pages button").filter({ hasText: "Team" }).click();
+  await page.getByRole("button", { name: "Use as home page", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.homePageId)).toBe(project.pages[0].children[0].id);
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  const aside = page.locator("#preview aside.subpage-navigation");
+  await expect(aside).toBeVisible();
+  await expect(aside.getByRole("link", { name: "Team", exact: true })).toHaveClass("active");
+  await expect(page.locator("#preview .site-menu a.active")).toHaveAttribute("href", "about/");
+  for (const size of ["125%", "250%"]) {
+    await page.locator("html").evaluate((element, size) => { element.style.fontSize = size; }, size);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  }
 });
 
 async function openField(page, content = "<p>Hello from the phone</p>") {

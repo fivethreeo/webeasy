@@ -89,7 +89,11 @@ export function normalizeProject(input, sanitize) {
     };
   });
   if (new Set(media.map((item) => item.filename)).size !== media.length) throw new Error("Duplicate media filename.");
-  return { version: 1, pages: normalizedPages, news, media };
+  const homePageId = input.homePageId ?? normalizedPages[0]?.id ?? null;
+  if (homePageId !== null && !pageRoutes(normalizedPages).some((entry) => entry.record.id === homePageId)) {
+    throw new Error("Choose an existing page for the homepage.");
+  }
+  return { version: 1, homePageId, pages: normalizedPages, news, media };
 }
 
 export function pageRoutes(pages, ancestors = []) {
@@ -126,12 +130,22 @@ function body(record, catalog) {
   return withAsides(`${rich(record.content ?? record.shortContent)}${sections}`, record.asides, catalog);
 }
 
-function menu(pages, prefix = "") {
+function menu(pages, activeId, currentId) {
   return pages.map((page) => {
-    const route = `${prefix}${page.slug}/`;
-    return `<li><a href="${route}">${escapeHtml(page.menuTitle)}</a>${page.children.length
-      ? `<ul>${menu(page.children, route)}</ul>` : ""}</li>`;
+    return `<li><a href="${page.slug}/"${page.id === activeId ? ' class="active"' : ""}${page.id === currentId ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a></li>`;
   }).join("\n");
+}
+
+function subpageNavigation(entry) {
+  const top = entry.ancestors[0] ?? entry.record;
+  if (!top.children.length) return "";
+  const active = new Set([...entry.ancestors.map((page) => page.id), entry.record.id]);
+  const links = (pages, prefix) => `<ul class="stack">${pages.map((page) => {
+    const route = `${prefix}${page.slug}/`;
+    return `<li><a href="${route}"${active.has(page.id) ? ' class="active"' : ""}${page.id === entry.record.id ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a>${page.children.length ? links(page.children, route) : ""}</li>`;
+  }).join("\n")}</ul>`;
+  return `<aside class="stack box content-asides subpage-navigation"><nav class="stack" aria-label="Subpages">
+    <h2>Subpages</h2>${links(top.children, `${top.slug}/`)}</nav></aside>`;
 }
 
 export function renderSite(project, catalog) {
@@ -147,11 +161,19 @@ export function renderSite(project, catalog) {
     }
     return template(id);
   };
-  const navigation = `<nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages)}
-    <li><a href="news/">News</a></li></ul></nav>`;
   const files = [];
-  const document = (title, content, file) => {
+  const pages = pageRoutes(project.pages);
+  const pageContent = (entry) => {
+    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog));
+    const aside = subpageNavigation(entry);
+    return aside ? `<div class="with-sidebar with-sidebar:right"><div class="stack content-main">${article}</div>${aside}</div>` : article;
+  };
+  const document = (title, content, file, currentId = null) => {
     const prefix = "../".repeat(file.split("/").length - 1) || "./";
+    const current = pages.find((entry) => entry.record.id === currentId);
+    const activeId = current?.ancestors[0]?.id ?? currentId;
+    const navigation = `<nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId)}
+    <li><a href="news/">News</a></li></ul></nav>`;
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -160,7 +182,6 @@ export function renderSite(project, catalog) {
 <link rel="stylesheet" href="assets/site.css"><script defer src="assets/site.js"></script>
 </head><body><main class="center stack site-shell published-shell">${navigation}${content}</main></body></html>`;
   };
-  const pages = pageRoutes(project.pages);
   for (const page of pages) {
     const file = `${href(page.route)}index.html`;
     const breadcrumbs = page.ancestors.length
@@ -168,7 +189,7 @@ export function renderSite(project, catalog) {
         `<li><a href="${page.ancestors.slice(0, index + 1).map((item) => item.slug).join("/")}/">${escapeHtml(ancestor.menuTitle)}</a></li>`).join("")
         }<li>${escapeHtml(page.record.menuTitle)}</li></ol></nav>` : "";
     files.push({ path: file, html: document(page.record.title,
-      breadcrumbs + render(pageTemplate(page.record), page.record, body(page.record, catalog)), file) });
+      breadcrumbs + pageContent(page), file, page.record.id) });
   }
   const news = sortedNews(project.news);
   for (const item of news) {
@@ -181,9 +202,10 @@ export function renderSite(project, catalog) {
     <time datetime="${item.date}">${item.date}</time></header>${rich(item.shortContent)}</article>`).join("\n");
   const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
   files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
-  const homepage = project.pages.length
-    ? render(pageTemplate(project.pages[0]), project.pages[0], body(project.pages[0], catalog)) : listing;
-  files.push({ path: "index.html", html: document(project.pages[0]?.title ?? "News", homepage, "index.html") });
+  const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
+  const home = homeEntry?.record;
+  const homepage = homeEntry ? pageContent(homeEntry) : listing;
+  files.push({ path: "index.html", html: document(home?.title ?? "News", homepage, "index.html", home?.id) });
   return files;
 }
 

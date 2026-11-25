@@ -12,8 +12,9 @@ apps after building; existing SQLite projects migrate without losing content.
 They have native local SQLite storage,
 phone photo/video pickers, and static-site export. Template
 examples and the building-block showcase are also bundled. Hosting setup QR codes
-can be read from saved pictures/screenshots or a camera photo. In-app
-FTP/SFTP/FTPS publishing and Dropbox backup are not implemented yet.
+can be read from saved pictures/screenshots or a camera photo. The Hosting tab
+publishes the generated website directly using FTP, explicit FTPS, or SFTP.
+Dropbox backup is not implemented.
 
 ## Structure
 
@@ -116,12 +117,14 @@ Previews use AndroidX WebKit's local HTTPS asset loader, not unrestricted file U
 ## Current boundaries
 
 The editor supports pages/subpages, dated news, ordered owned sections/asides,
-rich text, phone media import, and website export. Save explicitly before closing;
-export saves its content snapshot first. Android exports a ZIP through the share
+rich text, phone media import, website export and publishing. Going back from a
+changed page or news form asks to Save, Don't save, or Cancel. Discard restores
+that item's owned content without discarding unrelated drafts. Save explicitly
+before closing; export and publishing save their content snapshot first. Android exports a ZIP through the share
 sheet, and iOS exports a website folder through Files. Only referenced media,
 generated HTML, and website assets are exported, never the editable SQLite
-database, editor, catalog, or hosting credentials. In-app publishing and backup
-remain future integrations. Keep the live SQLite database local and create
+database, editor, catalog, or hosting credentials. Backup remains a future
+integration. Keep the live SQLite database local and create
 consistent snapshots for backup. Configure Dropbox separately from QR-provisioned
 SFTP/FTPS hosting credentials. Credentials must never go in the website bundle.
 
@@ -137,6 +140,22 @@ Sections have heading/content and optional asides. Asides have content and an
 optional heading. Internal IDs are stable; sections/asides belong to exactly one
 owner and are deleted with it. Deleting the last item does not restore the seed
 on the next launch.
+
+Choose **Use as homepage** in a native page/subpage form to select `index.html`.
+Existing projects default to their first top-level page. The selected page
+keeps its named URL and layout. Removing it falls back to the first remaining
+top-level page. The main menu lists top-level pages, marking the current page
+or its top-level ancestor with `class="active"`. Pages with subpages have an
+`<aside>` navigation shared by their descendants, with the current link marked
+active and `aria-current="page"`.
+
+Publishing validates FTPS certificates and asks you to compare and trust a new
+SFTP server's SHA-256 host-key fingerprint before sending the password. Changed
+trusted keys stop publishing. Plain FTP requires confirmation and is unencrypted.
+Matching generated files are overwritten and `index.html` is uploaded last.
+Unrelated remote files, previously published pages, and unused remote media are
+not deleted automatically. A failed upload can leave a partially updated website;
+retry after correcting the connection or permissions.
 
 Content supports headings, paragraphs, bold, italic, strike, underline, emphasis,
 bulleted/numbered lists, and blockquotes. Phone images and videos are inserted

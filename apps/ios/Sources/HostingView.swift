@@ -38,6 +38,7 @@ struct HostingView: View {
     @ObservedObject var model: NativeEditorModel
     @State private var source: QRImageSource?
     @State private var status = "Import your hosting setup QR. Pictures are decoded on this phone, not uploaded."
+    @State private var confirmingPublish = false
 
     var body: some View {
         NavigationStack {
@@ -51,9 +52,25 @@ struct HostingView: View {
                     HostingCredentials.remove()
                     status = "Hosting credentials removed."
                 }
-                Text("Credentials are kept in Keychain. Connecting and publishing from the app are not implemented yet.")
+                Button("Publish website") { confirmingPublish = true }.disabled(!model.ready || model.busy)
+                if model.busy { ProgressView() }
+                Text(model.status)
+                Text("Credentials and trusted SFTP keys are kept in Keychain. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }
             .navigationTitle("Hosting")
+            .alert("Publish website?", isPresented: $confirmingPublish) {
+                Button("Publish") { model.site(nil, export: false, publish: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Save and upload the website to your saved destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.")
+            }
+            .alert("Trust SFTP server key?", isPresented: Binding(get: { model.pendingHostKey != nil },
+                set: { if !$0 { model.pendingHostKey = nil } }), presenting: model.pendingHostKey) { key in
+                Button("Trust and publish") { model.trustHostKey(key) }
+                Button("Cancel", role: .cancel) {}
+            } message: { key in
+                Text("\(key.host):\(key.port)\n\(key.fingerprint)\nCompare this fingerprint with your server before trusting it. No password has been sent.")
+            }
             .task {
                 if let data = HostingCredentials.load(),
                    let connection = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

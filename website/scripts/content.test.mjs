@@ -56,7 +56,7 @@ test("deep subpages, owned sections/asides, and every dated news route are gener
   assert.equal(dom(deep).querySelectorAll('nav[aria-label="Breadcrumb"] a').length, 2);
   const page = dom(files.find((file) => file.path === "about/index.html").html);
   assert.equal(page.querySelectorAll("article section").length, 1);
-  assert.equal(page.querySelectorAll("aside").length, 2);
+  assert.equal(page.querySelectorAll("article aside").length, 2);
   const news = dom(files.find((file) => file.path === "news/2026-11-24/simpler-publishing/index.html").html);
   assert.equal(news.querySelectorAll("aside").length, 2);
   assert.ok(files.some((file) => file.path === "news/2026-11-21/first-story/index.html"));
@@ -116,4 +116,69 @@ test("page layouts apply independently to homepage and subpages and unavailable 
   assert.throws(() => renderSite(project, catalog), /Unavailable page layout/);
   project.pages[0].templateId = "../page";
   assert.throws(() => normalize(project), /Invalid page layout/);
+});
+
+test("homepage selection supports subpages, preserves their routes and validates references", () => {
+  const project = normalize(input);
+  assert.equal(project.homePageId, project.pages[0].id);
+  const child = project.pages[0].children[0];
+  project.homePageId = child.id;
+  child.templateId = "reading-page";
+  const files = renderSite(normalize(project), catalog);
+  const home = dom(files.find((file) => file.path === "index.html").html);
+  assert.equal(home.title, child.title);
+  assert.ok(home.querySelector(".reading-layout"));
+  assert.ok(files.some((file) => file.path === "about/team/index.html"));
+  for (const id of ["missing", project.news[0].id, project.pages[0].sections[0].id, 42, ""]) {
+    assert.throws(() => normalize({ ...project, homePageId: id }), /existing page/);
+  }
+  assert.equal(normalize({ version: 1, pages: [], news: [], media: [] }).homePageId, null);
+});
+
+test("main menu lists top-level pages and marks their active ancestor on nested routes and homepage", () => {
+  const project = normalize(input);
+  const root = project.pages[0];
+  const child = root.children[0];
+  child.children.push({ ...structuredClone(child), id: "deep-menu", slug: "deep", children: [] });
+  project.pages.push({
+    id: "other-menu", title: "Other", menuTitle: "Other", slug: "other", date: "2026-11-01",
+    content: "<p>Other page</p>", templateId: "page", children: [], sections: [], asides: [],
+  });
+
+  project.homePageId = child.children[0].id;
+  const files = renderSite(normalize(project), catalog);
+  for (const path of ["index.html", "about/index.html", "about/team/index.html", "about/team/deep/index.html", "other/index.html"]) {
+    const menu = dom(files.find((file) => file.path === path).html).querySelector('nav[aria-label="Main menu"]');
+    assert.deepEqual([...menu.querySelectorAll("a")].map((link) => link.getAttribute("href")), ["about/", "other/", "news/"]);
+    assert.equal(menu.querySelectorAll("a.active").length, 1);
+    assert.equal(menu.querySelector("a.active").getAttribute("href"), path.startsWith("other/") ? "other/" : "about/");
+    assert.equal(menu.querySelectorAll('a[aria-current="page"]').length, ["about/index.html", "other/index.html"].includes(path) ? 1 : 0);
+  }
+  assert.equal(dom(files.find((file) => file.path === "news/index.html").html).querySelectorAll(".site-menu a.active").length, 0);
+});
+
+test("subpage navigation is an aside shared by its parent and descendants, not by standalone pages", () => {
+  const project = normalize(input);
+  const root = project.pages[0];
+  const child = root.children[0];
+  child.children.push({ ...structuredClone(child), id: "deep-aside", slug: "deep", children: [] });
+  project.pages.push({
+    id: "standalone", title: "Standalone", menuTitle: "Standalone", slug: "standalone", date: "2026-11-01",
+    content: "<p>Standalone</p>", children: [], sections: [], asides: [],
+  });
+  project.homePageId = child.id;
+  const files = renderSite(normalize(project), catalog);
+  for (const path of ["index.html", "about/index.html", "about/team/index.html", "about/team/deep/index.html"]) {
+    const page = dom(files.find((file) => file.path === path).html);
+    const nav = page.querySelector('aside nav[aria-label="Subpages"]');
+    assert.ok(nav, path);
+    assert.deepEqual([...nav.querySelectorAll("a")].map((link) => link.getAttribute("href")), ["about/team/", "about/team/deep/"]);
+    const current = nav.querySelector('[aria-current="page"]');
+    assert.equal(current?.getAttribute("href") ?? null,
+      path === "about/index.html" ? null : path.includes("/deep/") ? "about/team/deep/" : "about/team/");
+    if (current) assert.ok(current.classList.contains("active"));
+  }
+  for (const path of ["standalone/index.html", "news/index.html"]) {
+    assert.equal(dom(files.find((file) => file.path === path).html).querySelector(".subpage-navigation"), null);
+  }
 });

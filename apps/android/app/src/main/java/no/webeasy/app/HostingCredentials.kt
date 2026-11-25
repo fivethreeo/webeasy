@@ -23,6 +23,13 @@ class HostingCredentials(context: Context) {
         }.generateKey()
     }
     fun save(connection: JSONObject) {
+        val previous = load()
+        if (!connection.has("_hostKeyFingerprint") && previous != null &&
+            connection.optString("protocol") == "sftp" && previous.optString("protocol") == "sftp" &&
+            connection.optString("host") == previous.optString("host") && connection.optInt("port") == previous.optInt("port") &&
+            previous.has("_hostKeyFingerprint")) {
+            connection.put("_hostKeyFingerprint", previous.getString("_hostKeyFingerprint"))
+        }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val encrypted = cipher.doFinal(connection.toString().toByteArray(Charsets.UTF_8))
         check(preferences.edit()

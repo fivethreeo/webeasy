@@ -18,8 +18,8 @@ android {
         applicationId = "no.webeasy.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
     }
 
     compileOptions {
@@ -36,6 +36,7 @@ android {
     }
 
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/websiteAssets"))
+    packaging.resources.excludes.add("META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     testOptions.unitTests.isIncludeAndroidResources = true
 }
 
@@ -50,8 +51,12 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("commons-net:commons-net:3.12.0")
+    implementation("com.hierynomus:sshj:0.40.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.apache.ftpserver:ftpserver-core:1.2.0")
+    testImplementation("org.apache.sshd:sshd-sftp:2.14.0")
 }

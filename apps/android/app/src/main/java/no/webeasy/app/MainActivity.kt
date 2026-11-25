@@ -58,6 +58,10 @@ class MainActivity : ComponentActivity() {
     private var tab by mutableIntStateOf(0)
     private val screens = mutableStateListOf<Screen>()
     private var pendingMedia: PendingMedia? = null
+    private val drafts = ContentDrafts()
+    private var pendingBack by mutableStateOf<Screen?>(null)
+    private var pendingPublish by mutableStateOf(false)
+    private var pendingHostKey by mutableStateOf<HostKeyApproval?>(null)
     private val hosting by lazy { HostingCredentials(this) }
     private var hostingStatus by mutableStateOf("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
 
@@ -132,6 +136,7 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 store.project() to JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
             }.fold(onSuccess = { (content, examples) -> runOnUiThread {
+                drafts.markSaved(drafts.capture(content))
                 project = content; catalog = examples; status = "Local SQLite. Save changes before closing."
             } }, onFailure = { runOnUiThread { status = it.message ?: "Cannot open local storage." } })
             runCatching { hosting.load()?.getString("host") }.getOrNull()?.let { host ->
@@ -141,6 +146,39 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 BackHandler(enabled = screens.isNotEmpty()) { back() }
+                if (pendingPublish) AlertDialog(onDismissRequest = { pendingPublish = false },
+                    title = { Text("Publish website?") },
+                    text = { Text("Save and upload the website to your saved hosting destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.") },
+                    confirmButton = { TextButton(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text("Publish") } },
+                    dismissButton = { TextButton(onClick = { pendingPublish = false }) { Text("Cancel") } })
+                pendingHostKey?.let { key ->
+                    AlertDialog(onDismissRequest = { pendingHostKey = null }, title = { Text("Trust SFTP server key?") },
+                        text = { Text("${key.host}:${key.port}\n${key.fingerprint}\nCompare this fingerprint with your server before trusting it. No password has been sent.") },
+                        confirmButton = { TextButton(onClick = {
+                            runCatching {
+                                val connection = hosting.load() ?: error("Import hosting first.")
+                                check(connection.getString("host") == key.host && connection.getInt("port") == key.port)
+                                hosting.save(connection.put("_hostKeyFingerprint", key.fingerprint))
+                                pendingHostKey = null; generate(true, publish = true)
+                            }.onFailure { status = "Cannot save the trusted server key." }
+                        }) { Text("Trust and publish") } },
+                        dismissButton = { TextButton(onClick = { pendingHostKey = null }) { Text("Cancel") } })
+                }
+                pendingBack?.let { target ->
+                    AlertDialog(onDismissRequest = { pendingBack = null }, title = { Text("Save changes?") },
+                        text = { Text("Save changes before going back? Don't save discards changes to this item.") },
+                        confirmButton = { TextButton(onClick = {
+                            pendingBack = null
+                            generate(false, afterSave = { if (screens.lastOrNull() === target) popScreen() })
+                        }, enabled = ready && !busy) { Text("Save") } },
+                        dismissButton = { Row {
+                            TextButton(onClick = {
+                                drafts.discard(target.record!!, project!!); changed(); status = "Changes discarded."
+                                pendingBack = null; popScreen()
+                            }) { Text("Don't save") }
+                            TextButton(onClick = { pendingBack = null }) { Text("Cancel") }
+                        } })
+                }
                 Scaffold(topBar = {
                     TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy") },
                         navigationIcon = { if (screens.isNotEmpty()) TextButton(onClick = ::back) { Text(getString(R.string.back)) } },
@@ -166,8 +204,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun changed() { revision += 1; status = "Unsaved changes." }
-    private fun back() { screens.removeAt(screens.lastIndex).directory?.deleteRecursively() }
+    private fun changed() {
+        project?.let { content ->
+            val home = content.optString("homePageId")
+            if (pagePath(home) == null) content.put("homePageId", content.getJSONArray("pages").optJSONObject(0)?.getString("id") ?: JSONObject.NULL)
+        }
+        revision += 1; status = "Unsaved changes."
+    }
+    private fun back() {
+        if (busy || screens.isEmpty()) return
+        val screen = screens.last()
+        if (screen.kind in listOf("page", "news") && drafts.hasChanges(screen.record!!, project!!)) pendingBack = screen
+        else popScreen()
+    }
+    private fun popScreen() { screens.removeAt(screens.lastIndex).directory?.deleteRecursively() }
     private fun JSONArray.records() = List(length()) { getJSONObject(it) }
     private fun array(record: JSONObject, key: String): JSONArray = record.optJSONArray(key) ?: JSONArray().also { record.put(key, it) }
 
@@ -204,7 +254,9 @@ class MainActivity : ComponentActivity() {
                             onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
                     }
                 }) { Text("Forget hosting") }
-                Text("Credentials are encrypted with Android Keystore. Connecting and publishing from the app are not implemented yet.")
+                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy) { Text("Publish website") }
+                if (busy) CircularProgressIndicator()
+                Text("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }
             return
         }
@@ -264,6 +316,12 @@ class MainActivity : ComponentActivity() {
                         val selected = record.optString("templateId", "page")
                         TextButton(onClick = { layoutDialog = true }) {
                             Text("Page layout: ${layouts.find { it.getString("id") == selected }?.getString("title") ?: selected}")
+                        }
+                    }
+                    item {
+                        val current = project!!.optString("homePageId") == record.getString("id")
+                        TextButton(onClick = { project!!.put("homePageId", record.getString("id")); changed() }, enabled = !current) {
+                            Text(if (current) "Current homepage" else "Use as homepage")
                         }
                     }
                 }
@@ -335,10 +393,13 @@ class MainActivity : ComponentActivity() {
         return project?.getJSONArray("pages")?.let { find(it, "") }
     }
 
-    private fun generate(compile: Boolean, path: String? = null, export: Boolean = false) {
+    private fun generate(compile: Boolean, path: String? = null, export: Boolean = false, afterSave: (() -> Unit)? = null, publish: Boolean = false) {
         if (busy || !ready || project == null) return
         busy = true
         val savedRevision = revision
+        val savedSnapshot = drafts.capture(project!!)
+        val destination = if (publish) runCatching { hosting.load() }.getOrNull() else null
+        if (publish && destination == null) { busy = false; status = "Import your hosting setup QR first."; return }
         val input = if (compile) JSONObject().put("project", project).put("catalog", catalog) else project!!
         generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "compile" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
             val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }
@@ -349,12 +410,24 @@ class MainActivity : ComponentActivity() {
             val result = output.getOrThrow()
             worker.execute {
                 runCatching {
-                    if (!compile || export) store.save(result.getJSONObject("project"))
-                    if (!compile) null else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                    if (!compile || export || publish) {
+                        store.save(result.getJSONObject("project"))
+                        runOnUiThread { drafts.markSaved(savedSnapshot) }
+                    }
+                    if (!compile) null else if (publish) {
+                        val directory = store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                        try { SitePublisher.publish(destination!!, directory) }
+                        finally { directory.deleteRecursively() }
+                        null
+                    } else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
                     else store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
                 }.fold(onSuccess = { file -> runOnUiThread {
                     busy = false
-                    if (!compile) status = if (savedRevision == revision) "Saved locally to SQLite." else "More recent changes remain unsaved."
+                    if (publish) status = if (savedRevision == revision) "Website published." else "Published snapshot excludes newer edits."
+                    else if (!compile) {
+                        status = if (savedRevision == revision) "Saved locally to SQLite." else "More recent changes remain unsaved."
+                        if (savedRevision == revision) afterSave?.invoke()
+                    }
                     else if (export && file != null) {
                         val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
                         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
@@ -362,7 +435,11 @@ class MainActivity : ComponentActivity() {
                         }, getString(R.string.share_website)))
                         status = "Website snapshot ready to share."
                     } else if (file != null) screens.add(Screen("preview", url = "$base/preview/${path ?: "index.html"}", directory = file))
-                } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "The operation failed." } })
+                } }, onFailure = { runOnUiThread {
+                    busy = false
+                    if (it is HostKeyApproval) { pendingHostKey = it; status = "Confirm the SFTP server key before publishing." }
+                    else status = it.message ?: "The operation failed."
+                } })
             }
         }
     }

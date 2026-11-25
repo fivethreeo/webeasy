@@ -95,9 +95,12 @@ class ContentStore(private val context: Context) :
 
     fun project(): JSONObject {
         val db = readableDatabase
+        val pages = pages(db, null)
+        val home = rows(db, "SELECT value FROM metadata WHERE key = 'home_page_id'").objects().firstOrNull()?.getString("value")
+            ?: pages.objects().firstOrNull()?.getString("id")
         val news = rows(db, "SELECT id, title, slug, date, short_content AS shortContent FROM news ORDER BY date DESC, slug")
         news.objects().forEach { related(db, it, "news") }
-        return JSONObject().put("version", 1).put("pages", pages(db, null)).put("news", news)
+        return JSONObject().put("version", 1).put("homePageId", home ?: JSONObject.NULL).put("pages", pages).put("news", news)
             .put("media", rows(db, "SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id"))
     }
 
@@ -179,6 +182,12 @@ class ContentStore(private val context: Context) :
         db.delete("pages", null, null)
         db.delete("news", null, null)
         writePages(db, project.getJSONArray("pages"), null)
+        db.delete("metadata", "key = ?", arrayOf("home_page_id"))
+        if (project.has("homePageId") && !project.isNull("homePageId")) {
+            val home = text(project, "homePageId", true)
+            require(rows(db, "SELECT id FROM pages WHERE id = ?", arrayOf(home)).length() == 1) { "Invalid homepage." }
+            db.execSQL("INSERT INTO metadata (key, value) VALUES ('home_page_id', ?)", arrayOf(home))
+        }
         project.getJSONArray("news").objects().forEach { news ->
             val newsId = id(news)
             insert(db, "news", mapOf("id" to newsId, "title" to text(news, "title", true),

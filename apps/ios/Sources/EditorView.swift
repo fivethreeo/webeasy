@@ -25,6 +25,20 @@ final class ContentNode: ObservableObject, Identifiable {
         result["asides"] = asides.map(\.json)
         return result
     }
+
+    func restore(_ record: [String: Any]) {
+        func nodes(_ key: String, _ existing: [ContentNode]) -> [ContentNode] {
+            let byID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+            return (record[key] as? [[String: Any]] ?? []).map { item in
+                if let id = item["id"] as? String, let node = byID[id] { node.restore(item); return node }
+                return ContentNode(item)
+            }
+        }
+        children = nodes("children", children)
+        sections = nodes("sections", sections)
+        asides = nodes("asides", asides)
+        fields = record.compactMapValues { $0 as? String }
+    }
 }
 
 enum ContentKind: Equatable { case page, news, section, aside }
@@ -44,11 +58,15 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     @Published var ready = false
     @Published var busy = false
     @Published var preview: NativePreview?
+    @Published var homePageID: String?
+    @Published var pendingHostKey: HostKeyApproval?
     let store: ContentStore?
     let catalog: Catalog?
     private var media: [[String: Any]] = []
     private let generator = WKWebView()
     private var revision = 0
+    private var savedNodes: [String: Data] = [:]
+    private var savedHomePageID: String?
 
     override init() {
         let storageError: String?
@@ -66,6 +84,9 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             let project = try store.project()
             pages = (project["pages"] as? [[String: Any]] ?? []).map { ContentNode($0) }
             news = (project["news"] as? [[String: Any]] ?? []).map { ContentNode($0) }
+            homePageID = project["homePageId"] as? String ?? pages.first?.id
+            savedNodes = try snapshot()
+            savedHomePageID = homePageID
             media = project["media"] as? [[String: Any]] ?? []
             generator.navigationDelegate = self
             generator.loadFileURL(store.websiteRoot.appendingPathComponent("generator.html"), allowingReadAccessTo: store.websiteRoot)
@@ -77,7 +98,44 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         status = "Local SQLite. Save changes before closing."
     }
 
-    func changed() { revision += 1; status = "Unsaved changes." }
+    func changed() {
+        if homePageID == nil || pagePath(homePageID!) == nil { homePageID = pages.first?.id }
+        revision += 1
+        status = "Unsaved changes."
+    }
+
+    private func nodeData(_ node: ContentNode) throws -> Data {
+        var record = node.json
+        record["_homepage"] = node.id == homePageID
+        return try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
+    }
+    private func snapshot() throws -> [String: Data] {
+        var result: [String: Data] = [:]
+        func collect(_ nodes: [ContentNode]) throws {
+            for node in nodes {
+                result[node.id] = try nodeData(node)
+                try collect(node.children); try collect(node.sections); try collect(node.asides)
+            }
+        }
+        try collect(pages); try collect(news)
+        return result
+    }
+    func hasChanges(_ node: ContentNode) -> Bool { savedNodes[node.id] != (try? nodeData(node)) }
+    func discard(_ node: ContentNode) {
+        if node.id == homePageID || node.id == savedHomePageID { homePageID = savedHomePageID }
+        if let data = savedNodes[node.id],
+           let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            node.restore(record)
+        } else {
+            func remove(_ nodes: inout [ContentNode]) {
+                nodes.removeAll { $0.id == node.id }
+                for item in nodes { remove(&item.children); remove(&item.sections); remove(&item.asides) }
+            }
+            remove(&pages); remove(&news)
+        }
+        changed()
+        status = "Changes discarded."
+    }
 
     func registerMedia(_ record: [String: Any]) {
         if !media.contains(where: { $0["id"] as? String == record["id"] as? String }) { media.append(record) }
@@ -93,7 +151,14 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             throw ContentError.invalid("Cannot read this hosting QR.")
         }
         if let error = output["error"] as? String { throw ContentError.invalid(error) }
-        guard let connection = output["connection"] as? [String: Any] else { throw ContentError.invalid("Invalid hosting QR.") }
+        guard var connection = output["connection"] as? [String: Any] else { throw ContentError.invalid("Invalid hosting QR.") }
+        if let data = HostingCredentials.load(),
+           let previous = try? JSONDecoder().decode(HostingDestination.self, from: data),
+           previous.protocol == "sftp", connection["protocol"] as? String == "sftp",
+           connection["host"] as? String == previous.host, connection["port"] as? Int == previous.port,
+           let fingerprint = previous._hostKeyFingerprint {
+            connection["_hostKeyFingerprint"] = fingerprint
+        }
         try HostingCredentials.save(JSONSerialization.data(withJSONObject: connection))
         return "Saved hosting: \(connection["host"] as? String ?? ""). Not connected yet."
     }
@@ -111,7 +176,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     }
 
     private var project: [String: Any] {
-        ["version": 1, "pages": pages.map(\.json), "news": news.map(\.json), "media": media]
+        ["version": 1, "homePageId": homePageID.map { $0 as Any } ?? NSNull(), "pages": pages.map(\.json), "news": news.map(\.json), "media": media]
     }
 
     private func generate(_ compile: Bool) async throws -> [String: Any] {
@@ -134,49 +199,87 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         return output
     }
 
-    func save() {
+    func save(afterSaved: (() -> Void)? = nil) {
         guard !busy, ready, let store else { return }
         busy = true
         let savedRevision = revision
         Task {
             defer { busy = false }
             do {
+                let nodes = try snapshot()
+                let savedHome = homePageID
                 let output = try await generate(false)
                 let data = try JSONSerialization.data(withJSONObject: output["project"]!)
                 try await Task.detached {
                     guard let project = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ContentError.invalid("Invalid project.") }
                     try store.save(project)
                 }.value
+                savedNodes = nodes
+                savedHomePageID = savedHome
                 status = savedRevision == revision ? "Saved locally to SQLite." : "More recent changes remain unsaved."
+                if savedRevision == revision { afterSaved?() }
             } catch { status = error.localizedDescription }
         }
     }
 
-    func site(_ path: String?, export: Bool) {
+    func site(_ path: String?, export: Bool, publish: Bool = false) {
         guard !busy, ready, let store else { return }
+        let destination = publish ? HostingCredentials.load().flatMap { try? JSONDecoder().decode(HostingDestination.self, from: $0) } : nil
+        if publish && destination == nil { status = "Import your hosting setup QR first."; return }
         busy = true
         let savedRevision = revision
         Task {
             defer { busy = false }
             do {
+                let nodes = try snapshot()
+                let savedHome = homePageID
                 let output = try await generate(true)
                 let data = try JSONSerialization.data(withJSONObject: output)
+                if export || publish {
+                    let projectData = try JSONSerialization.data(withJSONObject: output["project"]!)
+                    try await Task.detached {
+                        guard let project = try JSONSerialization.jsonObject(with: projectData) as? [String: Any] else {
+                            throw ContentError.invalid("Invalid project.")
+                        }
+                        try store.save(project)
+                    }.value
+                    savedNodes = nodes
+                    savedHomePageID = savedHome
+                }
                 let directory = try await Task.detached {
                     guard let output = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let project = output["project"] as? [String: Any],
                           let files = output["files"] as? [[String: Any]],
                           let references = output["referencedMedia"] as? [String] else { throw ContentError.invalid("Invalid website.") }
-                    if export { try store.save(project) }
                     return try store.exportSite(files, references: references)
                 }.value
-                if export {
+                if let destination {
+                    defer { try? FileManager.default.removeItem(at: directory) }
+                    status = "Publishing website..."
+                    try await SitePublisher.publish(destination, root: directory)
+                    status = savedRevision == revision ? "Website published." : "Published snapshot excludes newer edits."
+                } else if export {
                     preview = NativePreview(root: directory, path: "", temporary: true)
                     status = savedRevision == revision ? "Website ready to export." : "Exported snapshot excludes newer edits."
                 } else {
                     preview = NativePreview(root: directory, path: path ?? "index.html", temporary: true)
                 }
+            } catch let approval as HostKeyApproval {
+                pendingHostKey = approval
+                status = "Confirm the SFTP server key before publishing."
             } catch { status = error.localizedDescription }
         }
+    }
+
+    func trustHostKey(_ key: HostKeyApproval) {
+        do {
+            guard let data = HostingCredentials.load() else { throw ContentError.invalid("Import hosting first.") }
+            var destination = try JSONDecoder().decode(HostingDestination.self, from: data)
+            guard destination.host == key.host, destination.port == key.port else { throw ContentError.invalid("Hosting destination changed.") }
+            destination._hostKeyFingerprint = key.fingerprint
+            try HostingCredentials.save(JSONEncoder().encode(destination))
+            pendingHostKey = nil
+            site(nil, export: false, publish: true)
+        } catch { status = error.localizedDescription }
     }
 
     func pagePath(_ id: String) -> String? {
@@ -266,6 +369,14 @@ private struct NativeContentForm: View {
     let kind: ContentKind
     @ObservedObject var model: NativeEditorModel
     @State private var editingContent = false
+    @State private var confirmingBack = false
+    @Environment(\.dismiss) private var dismiss
+
+    private func back() {
+        guard !model.busy else { return }
+        if (kind == .page || kind == .news) && model.hasChanges(node) { confirmingBack = true }
+        else { dismiss() }
+    }
 
     private func text(_ key: String) -> Binding<String> {
         Binding(get: { node.fields[key] ?? "" }, set: { node.fields[key] = $0; model.changed() })
@@ -290,6 +401,9 @@ private struct NativeContentForm: View {
                             Text(entry.title).tag(entry.id)
                         }
                     }
+                    Button(model.homePageID == node.id ? "Current homepage" : "Use as homepage") {
+                        model.homePageID = node.id; model.changed()
+                    }.disabled(model.homePageID == node.id)
                 }
                 TextField("Slug", text: text("slug")).textInputAutocapitalization(.never).autocorrectionDisabled()
                 DatePicker("Date", selection: date, displayedComponents: .date)
@@ -336,6 +450,15 @@ private struct NativeContentForm: View {
             Text(model.status)
         }
         .navigationTitle(node.fields[kind == .page || kind == .news ? "title" : "heading"] ?? "Content")
+        .navigationBarBackButtonHidden(true)
+        .alert("Save changes?", isPresented: $confirmingBack) {
+            Button("Save") { model.save(afterSaved: { dismiss() }) }
+                .disabled(!model.ready || model.busy)
+            Button("Don't save", role: .destructive) { model.discard(node); dismiss() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Save changes before going back? Don't save discards changes to this item.")
+        }
         .fullScreenCover(isPresented: $editingContent) {
             NavigationStack {
                 NativeRichField(content: text(kind == .news ? "shortContent" : "content"), model: model)
@@ -348,8 +471,13 @@ private struct NativeContentForm: View {
             }
         }
         .toolbar {
-            EditButton()
-            Button("Save") { model.save() }.disabled(!model.ready || model.busy)
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: back) { Label("Back", systemImage: "chevron.left") }.disabled(model.busy)
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                EditButton()
+                Button("Save") { model.save() }.disabled(!model.ready || model.busy)
+            }
         }
     }
 }
