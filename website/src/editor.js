@@ -174,6 +174,27 @@ export function richEditor(record, key, labelText, options = {}) {
   field.setAttribute("aria-multiline", "true");
   field.setAttribute("aria-labelledby", label.id);
   field.innerHTML = sanitize(record[key]);
+  let activeFigure = null;
+  const selectFigure = (figure) => {
+    activeFigure?.removeAttribute("data-editor-selected");
+    activeFigure = figure;
+    activeFigure?.setAttribute("data-editor-selected", "");
+    removeFigure.disabled = !activeFigure;
+  };
+  const removeFigure = button("Remove figure", () => {
+    if (!activeFigure || !field.contains(activeFigure)) { selectFigure(null); return; }
+    const range = document.createRange();
+    range.setStartBefore(activeFigure); range.collapse(true);
+    const figure = activeFigure;
+    selectFigure(null);
+    figure.remove();
+    restoreSelection(field, range);
+    rememberSelection(field);
+    update(); refreshMarks();
+  });
+  removeFigure.disabled = true;
+  removeFigure.title = "Select a picture, video, or caption, then remove its figure.";
+  removeFigure.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
   const marks = element("div", "cluster formatting-marks");
   const mediaActions = element("div", "cluster media-actions");
   const markControls = [];
@@ -181,6 +202,14 @@ export function richEditor(record, key, labelText, options = {}) {
     const selection = window.getSelection();
     if (!selection?.rangeCount || !field.contains(selection.anchorNode)) return;
     rememberSelection(field);
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    let figure = (node.nodeType === 1 ? node : node.parentElement)?.closest("figure");
+    if (!figure && range.startContainer === range.endContainer && range.endOffset === range.startOffset + 1) {
+      const child = range.startContainer.childNodes[range.startOffset];
+      if (child?.nodeName === "FIGURE") figure = child;
+    }
+    selectFigure(figure && field.contains(figure) ? figure : null);
     for (const [control, command] of markControls) {
       control.setAttribute("aria-pressed", String(document.queryCommandState(command)));
     }
@@ -278,6 +307,7 @@ export function richEditor(record, key, labelText, options = {}) {
     control.addEventListener("pointerdown", () => rememberSelection(field));
     mediaActions.append(control);
   }
+  mediaActions.append(removeFigure);
   const selectedLink = (range = restoreSelection(field)) => {
     const node = range.commonAncestorContainer;
     return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
@@ -317,7 +347,16 @@ export function richEditor(record, key, labelText, options = {}) {
   field.addEventListener("keyup", refreshMarks);
   field.addEventListener("pointerup", () => { emphasizeTyping = false; refreshMarks(); });
   field.addEventListener("blur", () => { record[key] = sanitize(field.innerHTML); });
-  field.addEventListener("click", (event) => { if (event.target.closest("a")) event.preventDefault(); });
+  field.addEventListener("click", (event) => {
+    if (event.target.closest("a")) event.preventDefault();
+    const figure = event.target.closest("figure");
+    if (figure && !event.target.closest("figcaption")) {
+      const range = document.createRange();
+      range.selectNode(figure);
+      restoreSelection(field, range);
+    }
+    refreshMarks();
+  });
   field.addEventListener("paste", (event) => {
     event.preventDefault();
     const html = event.clipboardData.getData("text/html");

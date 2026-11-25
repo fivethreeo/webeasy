@@ -44,19 +44,26 @@ select {
   --padding: var(--s0);
 }
 
+.rich-editor figure[data-editor-selected] {
+  outline: 3px solid #a05a13;
+  outline-offset: 4px;
+}
+
 .formatting {
   --gap: var(--s-2);
   --space: var(--s-2);
   min-inline-size: 0;
 }
 
-.formatting-marks {
+.formatting-marks,
+.media-actions {
   flex-wrap: nowrap;
   overflow-x: auto;
   max-inline-size: 100%;
 }
 
-.formatting-marks > * {
+.formatting-marks > *,
+.media-actions > * {
   flex-shrink: 0;
 }
 

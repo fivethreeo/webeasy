@@ -79,7 +79,24 @@ export function createRichTextSanitizer(window) {
     for (const source of fragment.querySelectorAll("source")) {
       if (source.parentElement?.tagName !== "VIDEO" || !source.hasAttribute("src")) source.remove();
     }
-    for (const figure of fragment.querySelectorAll("figure")) figure.className = "stack";
+    for (const figure of [...fragment.querySelectorAll("figure")].reverse()) {
+      figure.className = "stack";
+      const caption = window.document.createElement("figcaption");
+      for (const child of [...figure.childNodes]) {
+        if (child.nodeType === 1) {
+          if (child.matches("img,video,figure")) continue;
+          if (child.querySelector("img,video,figure")) {
+            if (!child.textContent.trim()) continue;
+            for (const media of child.querySelectorAll("img,video")) {
+              if (media.closest("figure") === figure) figure.insertBefore(media, child);
+            }
+          }
+          if (child.tagName === "FIGCAPTION") { caption.append(...child.childNodes); child.remove(); continue; }
+        }
+        caption.append(child);
+      }
+      if (caption.textContent.trim()) figure.append(caption);
+    }
     const container = window.document.createElement("div");
     container.append(fragment);
     return container.innerHTML;

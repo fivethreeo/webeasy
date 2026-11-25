@@ -163,6 +163,42 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
 });
 
+test("image and video figures can be removed without deleting surrounding content", async ({ page, isMobile }) => {
+  await openField(page, '<p>Before</p><figure><img src="assets/coast.svg" alt="Coast"><figcaption>Our coast</figcaption></figure><p>Between</p><figure><video src="media/native-test.mp4"></video><figcaption>Our video</figcaption></figure><p>After</p>');
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const remove = page.getByRole("button", { name: "Remove figure", exact: true });
+  const activate = (locator) => isMobile ? locator.tap() : locator.click();
+  await expect(remove).toBeDisabled();
+  await activate(field.locator("img"));
+  await expect(remove).toBeEnabled();
+  await activate(remove);
+  await expect(field.locator("img")).toHaveCount(0);
+  await expect(field.locator("video")).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("assets/coast.svg");
+  await activate(field.locator("figcaption"));
+  await page.keyboard.press("End");
+  await page.keyboard.type(" caption");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<figcaption>Our video caption</figcaption>");
+  expect(await page.evaluate(() => window.__content)).not.toContain("data-editor-selected");
+  await activate(remove);
+  await expect(field.locator("figure")).toHaveCount(0);
+  await expect(field.locator("p")).toHaveText(["Before", "Between", "After"]);
+  await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<figure");
+});
+
+test("an uncaptioned figure can be removed and the empty field stays editable", async ({ page, isMobile }) => {
+  await openField(page, '<figure><img src="assets/coast.svg" alt="Coast"></figure>');
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const activate = (locator) => isMobile ? locator.tap() : locator.click();
+  await activate(field.locator("img"));
+  await activate(page.getByRole("button", { name: "Remove figure", exact: true }));
+  await expect(field.locator("figure")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Remove figure", exact: true })).toBeDisabled();
+  await page.keyboard.type("Still editable");
+  await expect(field).toHaveText("Still editable");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("Still editable");
+});
+
 test("page links save and navigate in previews, and the logo returns home without a home menu item", async ({ page }) => {
   await openEditor(page);
   const field = page.getByRole("textbox", { name: "Content", exact: true });

@@ -43,6 +43,23 @@ test("media URLs cannot reference external, temporary device, encoded, or parent
   }
 });
 
+test("figure text becomes one figcaption while preserving media, formatting, and surrounding paragraphs", () => {
+  const html = sanitizeRichText('<p>Before</p><figure><img src="assets/coast.svg" alt="Coast">Our <strong>coast</strong><p>A note.</p><figcaption>Existing caption.</figcaption></figure><p>After</p>');
+  const document = dom(html);
+  const figure = document.querySelector("figure");
+  assert.equal(figure.querySelectorAll(":scope > figcaption").length, 1);
+  assert.equal(figure.querySelector(":scope > img").getAttribute("src"), "assets/coast.svg");
+  assert.equal(figure.querySelector("figcaption strong").textContent, "coast");
+  assert.equal(figure.querySelector("figcaption").textContent, "Our coastA note.Existing caption.");
+  const outsideCaption = figure.cloneNode(true);
+  outsideCaption.querySelector("figcaption").remove();
+  assert.equal(outsideCaption.textContent.trim(), "");
+  assert.deepEqual([...document.body.children].map((node) => node.tagName), ["P", "FIGURE", "P"]);
+  const withoutCaption = dom(sanitizeRichText('<figure><video src="media/clip.mp4"></video></figure>'));
+  assert.equal(withoutCaption.querySelector("figcaption"), null);
+  assert.equal(sanitizeRichText(html), html);
+});
+
 test("links retain safe destinations and text but cannot execute scripts or open device files", () => {
   for (const href of ["https://example.com/path?q=1", "http://example.com/", "mailto:hello@example.com",
     "tel:+4712345678", "/", "index.html", "about/team/", "#section"]) {

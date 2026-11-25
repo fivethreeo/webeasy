@@ -174,6 +174,8 @@ Content supports headings, paragraphs, bold, italic, strike, underline, emphasis
 bulleted/numbered lists, blockquotes, and links. **Link** accepts a URL or a
 page/subpage choice; existing links can be edited or removed. Phone images and videos are inserted
 as `<figure>` containing `<img>` or `<video><source>`, with optional `<figcaption>`.
+Text inside a figure is kept in one `<figcaption>`. Select a picture, video, or
+caption and choose **Remove figure** to remove it without deleting the stored media.
 The image dialog provides alternative text. Imported files are copied into
 app-owned media storage; content refers to portable `media/<filename>` paths,
 never temporary picker URLs. HEIC/HEIF images are converted to JPEG where native
