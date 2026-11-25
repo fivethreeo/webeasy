@@ -27,28 +27,29 @@ struct CatalogView: View {
                         Text(entry.description).foregroundStyle(.secondary)
                     }
 
-                    struct TemplateSourceView: View {
-                        let entry: CatalogEntry
-
-                        var body: some View {
-                            ScrollView {
-                                Text(entry.source)
-                                    .font(.body.monospaced())
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding()
-                            }
-                            .navigationTitle(entry.title)
-                            .navigationBarTitleDisplayMode(.inline)
-                            .toolbar {
-                                NavigationLink("Preview") { WebsitePreview(path: entry.preview) }
-                            }
-                        }
-                    }
                     .padding(.vertical, 8)
                 }
             }
             .navigationTitle(title)
+        }
+    }
+}
+
+struct TemplateSourceView: View {
+    let entry: CatalogEntry
+
+    var body: some View {
+        ScrollView {
+            Text(entry.source)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+        }
+        .navigationTitle(entry.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            NavigationLink("Preview") { WebsitePreview(path: entry.preview) }
         }
     }
 }
