@@ -142,6 +142,9 @@ content comparisons, not a check of server files or hosting settings.
 
 **Templates** opens selectable template source code, with a **Preview** action.
 Building blocks remain available to the renderer but are not a native menu tab.
+Page layouts use section wrappers; news and article templates retain article
+wrappers. The document head, logo, and navigation are generated separately from
+the selected content template.
 
 ## Content and phone media
 

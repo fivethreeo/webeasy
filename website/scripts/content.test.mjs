@@ -89,8 +89,8 @@ test("deep subpages, owned sections/asides, and every dated news route are gener
   assert.ok(deep.includes('<base href="../../../">'));
   assert.equal(dom(deep).querySelectorAll('nav[aria-label="Breadcrumb"] a').length, 2);
   const page = dom(files.find((file) => file.path === "about/index.html").html);
-  assert.equal(page.querySelectorAll("article section").length, 1);
-  assert.equal(page.querySelectorAll("article aside").length, 2);
+  assert.equal(page.querySelectorAll(".content-blocks section").length, 1);
+  assert.equal(page.querySelectorAll(".content-blocks aside").length, 2);
   const news = dom(files.find((file) => file.path === "news/2026-11-24/simpler-publishing/index.html").html);
   assert.equal(news.querySelectorAll("aside").length, 2);
   assert.ok(files.some((file) => file.path === "news/2026-11-21/first-story/index.html"));
@@ -108,6 +108,23 @@ test("news index contains only the three newest summaries as articles", () => {
     const project = { version: 1, pages: [], news: input.news.slice(0, count), media: [] };
     const listing = renderSite(normalize(project), catalog).find((file) => file.path === "news/index.html");
     assert.equal(dom(listing.html).querySelectorAll("article").length, count);
+  }
+});
+
+test("page layouts render sections on home and named routes while news remains an article", () => {
+  const project = normalize(input);
+  for (const layout of catalog.templates.filter((entry) => entry.pageLayout)) {
+    project.pages[0].templateId = layout.id;
+    const files = renderSite(project, catalog);
+    for (const path of ["index.html", "about/index.html"]) {
+      const document = dom(files.find((file) => file.path === path).html);
+      assert.equal(document.querySelector(".content-blocks").tagName, "SECTION", layout.id);
+      assert.equal(document.querySelector(".content-blocks h1").textContent, project.pages[0].title);
+      assert.equal(document.querySelector("article"), null, layout.id);
+    }
+    const news = dom(files.find((file) => file.path === "news/2026-11-24/simpler-publishing/index.html").html);
+    assert.equal(news.querySelector(".content-blocks").tagName, "ARTICLE");
+    assert.equal(news.querySelector("article time").dateTime, "2026-11-24");
   }
 });
 
