@@ -73,11 +73,11 @@ document.addEventListener("selectionchange", () => {
   const parent = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
   parent?.closest(".rich-editor")?.dispatchEvent(new Event("editor-selection"));
 });
-function restoreSelection(field) {
+function restoreSelection(field, savedRange = selectionRange) {
   field.focus();
-  const range = selectionRange && field.contains(selectionRange.commonAncestorContainer)
-    ? selectionRange : document.createRange();
-  if (range !== selectionRange) { range.selectNodeContents(field); range.collapse(false); }
+  const range = savedRange && field.contains(savedRange.commonAncestorContainer)
+    ? savedRange : document.createRange();
+  if (range !== savedRange) { range.selectNodeContents(field); range.collapse(false); }
   const selection = window.getSelection();
   selection.removeAllRanges();
   selection.addRange(range);
@@ -278,18 +278,18 @@ export function richEditor(record, key, labelText, options = {}) {
     control.addEventListener("pointerdown", () => rememberSelection(field));
     mediaActions.append(control);
   }
-  const selectedLink = () => {
-    const range = restoreSelection(field);
+  const selectedLink = (range = restoreSelection(field)) => {
     const node = range.commonAncestorContainer;
     return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
   };
   const link = button("Link", async () => {
-    const current = selectedLink();
-    const selectedText = window.getSelection().toString();
+    const linkRange = restoreSelection(field).cloneRange();
+    const current = selectedLink(linkRange);
+    const selectedText = linkRange.toString();
     const linkProject = options.getLinkProject ? await options.getLinkProject() : contentProject;
     const details = await linkDetails(linkProject, selectedText, current);
-    if (!details) { restoreSelection(field); return; }
-    const range = restoreSelection(field);
+    if (!details) { restoreSelection(field, linkRange); return; }
+    const range = restoreSelection(field, linkRange);
     if (current && field.contains(current)) {
       current.setAttribute("href", details.href);
       if (current.textContent !== details.text) current.textContent = details.text;

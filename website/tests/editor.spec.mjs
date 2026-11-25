@@ -261,6 +261,40 @@ test("adding a link wraps selected formatted text without replacing its surround
   await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="about/team/"');
 });
 
+test("selected-text links keep their original range through native replies and dialog focus changes", async ({ page }) => {
+  await openField(page, "<p>Before <strong>our team</strong> after</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await page.evaluate(() => {
+    const request = window.WebeasyNative.request;
+    window.WebeasyNative.request = (serialized) => {
+      if (JSON.parse(serialized).method === "pageLinks") window.__replyPageLinks = () => request(serialized);
+      else request(serialized);
+    };
+  });
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field.querySelector("strong"));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  const collapseSelection = () => field.evaluate((field) => {
+    getSelection().setBaseAndExtent(field, 0, field, 0);
+    document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await collapseSelection();
+  await page.evaluate(() => window.__replyPageLinks());
+  await expect(page.getByLabel("Link text", { exact: true })).toHaveValue("our team");
+  await page.getByLabel("Page or subpage").selectOption("about/team/");
+  await collapseSelection();
+  await page.getByRole("button", { name: "Insert link", exact: true }).click();
+  await expect(field.locator("a")).toHaveText("our team");
+  await expect(field.locator("a")).toHaveAttribute("href", "about/team/");
+  await expect(field.locator("strong")).toHaveText("our team");
+  await expect(field).toHaveText("Before our team after");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="about/team/"');
+});
+
 test("inline marks toggle on the selected word and emphasis works at the caret", async ({ page }) => {
   await openField(page, "<p>alpha beta gamma</p>");
   const field = page.getByRole("textbox", { name: "Content", exact: true });
