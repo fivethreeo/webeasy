@@ -482,15 +482,24 @@ class MainActivity : ComponentActivity() {
             }
             items(changes.length(), key = { changes.getJSONObject(it).getString("id") }) { index ->
                 val change = changes.getJSONObject(index)
+                val isPageOrNews = change.optString("kind") in listOf("Page", "News")
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(change.getString("title"), style = MaterialTheme.typography.titleLarge)
                     Text(change.getString("status"), style = MaterialTheme.typography.titleMedium)
+                    if (isPageOrNews) {
+                        SelectionContainer { Text("ID: ${change.getString("id")}", fontFamily = FontFamily.Monospace) }
+                    }
                     change.getJSONArray("fields").records().forEach { field ->
                         Text(field.getString("name"), style = MaterialTheme.typography.titleMedium)
-                        Text("Before")
-                        SelectionContainer { Text(field.getString("before").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
-                        Text("After")
-                        SelectionContainer { Text(field.getString("after").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                        if (isPageOrNews && change.getString("status") != "Changed") {
+                            val value = field.getString(if (change.getString("status") == "Added") "after" else "before")
+                            SelectionContainer { Text(value.ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                        } else {
+                            Text("Before")
+                            SelectionContainer { Text(field.getString("before").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                            Text("After")
+                            SelectionContainer { Text(field.getString("after").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                        }
                     }
                     HorizontalDivider()
                 }

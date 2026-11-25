@@ -26,17 +26,20 @@ export function projectChanges(before, after) {
     for (const id of new Set([...newById.keys(), ...oldById.keys()])) {
       const oldItem = oldById.get(id), newItem = newById.get(id);
       const title = `${parent ? `${parent} / ` : ""}${kind}: ${name(newItem ?? oldItem)}`;
-      const changed = Object.entries(fields[kind]).flatMap(([key, label]) => {
+      const summary = (kind === "Page" || kind === "News") && (!oldItem || !newItem);
+      const changed = Object.entries(summary ? { title: "Title", date: "Date" } : fields[kind]).flatMap(([key, label]) => {
         const previous = oldItem ? value(oldItem, key) : "";
         const current = newItem ? value(newItem, key) : "";
-        return previous === current ? [] : [{ name: label, before: previous, after: current }];
+        return !summary && previous === current ? [] : [{ name: label, before: previous, after: current }];
       });
       if (changed.length || !oldItem || !newItem) {
-        changes.push({ id, title, status: !oldItem ? "Added" : !newItem ? "Removed" : "Changed", fields: changed });
+        changes.push({ id, kind, title, status: !oldItem ? "Added" : !newItem ? "Removed" : "Changed", fields: changed });
       }
       if (kind === "Page") compare(oldItem?.children, newItem?.children, "Page", title);
-      if (kind === "Page" || kind === "News") compare(oldItem?.sections, newItem?.sections, "Section", title);
-      if (kind !== "Aside" && kind !== "Media") compare(oldItem?.asides, newItem?.asides, "Aside", title);
+      if (!summary) {
+        if (kind === "Page" || kind === "News") compare(oldItem?.sections, newItem?.sections, "Section", title);
+        if (kind !== "Aside" && kind !== "Media") compare(oldItem?.asides, newItem?.asides, "Aside", title);
+      }
     }
   }
   const home = (project) => project.homePageId ?? project.pages[0]?.id ?? null;

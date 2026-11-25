@@ -58,6 +58,50 @@ test("page and section reordering is visible but news sorting and index shifts a
     [`Page: ${sections.pages[0].title} / Section order`]);
 });
 
+test("added and removed pages and news contain only title and date, not owned content", () => {
+  for (const [collection, kind] of [["pages", "Page"], ["news", "News"]]) {
+    const current = fresh();
+    const record = {
+      id: `added-${collection}`, title: "New entry", date: "2026-11-25",
+      slug: "new-entry", menuTitle: "New menu title", templateId: "reading-page",
+      content: "<p>Full page content.</p>", shortContent: "<p>Full news content.</p>",
+      sections: [{ id: "owned-section", heading: "Section", content: "<p>Section content.</p>",
+        asides: [{ id: "section-aside", heading: "Aside", content: "<p>Aside content.</p>" }] }],
+      asides: [{ id: "owned-aside", heading: "Aside", content: "<p>Aside content.</p>" }],
+    };
+    current[collection].push(record);
+    for (const [before, after, status] of [[seed, current, "Added"], [current, seed, "Removed"]]) {
+      const field = (name, text) => ({
+        name, before: status === "Removed" ? text : "", after: status === "Added" ? text : "",
+      });
+      assert.deepEqual(projectChanges(before, after), [{
+        id: record.id, kind, title: `${kind}: ${record.title}`, status,
+        fields: [field("Title", record.title), field("Date", record.date)],
+      }]);
+    }
+  }
+});
+
+test("added and removed child pages keep their own IDs and empty dates in compact summaries", () => {
+  const current = fresh();
+  const parent = current.pages[0];
+  parent.children.push({
+    id: "new-child", title: "Child page", date: "", content: "<p>Full content.</p>",
+    sections: [{ id: "child-section", heading: "Section", content: "<p>Section content.</p>" }],
+  });
+  for (const [before, after, status] of [[seed, current, "Added"], [current, seed, "Removed"]]) {
+    const changes = projectChanges(before, after);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].id, "new-child");
+    assert.equal(changes[0].title, `Page: ${parent.title} / Page: Child page`);
+    assert.equal(changes[0].status, status);
+    assert.deepEqual(changes[0].fields, [
+      { name: "Title", before: status === "Removed" ? "Child page" : "", after: status === "Added" ? "Child page" : "" },
+      { name: "Date", before: "", after: "" },
+    ]);
+  }
+});
+
 test("homepage selection and imported media changes are included", () => {
   const current = fresh();
   current.homePageId = current.pages[0].children[0].id;

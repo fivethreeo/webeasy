@@ -132,8 +132,10 @@ consistent snapshots for backup. Configure Dropbox separately from QR-provisione
 SFTP/FTPS hosting credentials. Credentials must never go in the website bundle.
 
 The native **Changes** tab has separate **Unsaved** and **Unpublished** views,
-with before/after values for changed content, additions, removals, ordering, and
-homepage selection. Unsaved compares against the last local save. Unpublished
+with before/after values for changed content, ordering, and homepage selection.
+Added or removed pages and news show only their title and date, without their
+content, sections, or asides. Page and news changes also show the record ID.
+Unsaved compares against the last local save. Unpublished
 compares against the last successful publish recorded on this device; saving,
 exporting, or a failed upload does not advance that baseline. The published
 snapshot survives app restarts. Older installations start tracking after their
