@@ -39,20 +39,55 @@ struct HostingView: View {
     @State private var source: QRImageSource?
     @State private var status = "Import your hosting setup QR. Pictures are decoded on this phone, not uploaded."
     @State private var confirmingPublish = false
+    @State private var publicPathPrefix = ""
+    @State private var uploadSubfolder = ""
+    @State private var savedPublicPathPrefix = ""
+    @State private var savedUploadSubfolder = ""
+
+    private var settingsChanged: Bool {
+        publicPathPrefix != savedPublicPathPrefix || uploadSubfolder != savedUploadSubfolder
+    }
+
+    private func loadSettings(_ destination: HostingDestination) {
+        publicPathPrefix = destination.publicPathPrefix ?? ""
+        uploadSubfolder = destination.uploadSubfolder ?? ""
+        savedPublicPathPrefix = publicPathPrefix
+        savedUploadSubfolder = uploadSubfolder
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Text(status)
-                Button("Read QR from picture") { source = .picture }
+                Button("Read QR from picture") { source = .picture }.disabled(model.busy)
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take a QR picture") { source = .camera }
+                    Button("Take a QR picture") { source = .camera }.disabled(model.busy)
                 }
                 Button("Forget hosting", role: .destructive) {
                     HostingCredentials.remove()
+                    publicPathPrefix = ""; uploadSubfolder = ""
+                    savedPublicPathPrefix = ""; savedUploadSubfolder = ""
                     status = "Hosting credentials removed."
                 }
-                Button("Publish website") { confirmingPublish = true }.disabled(!model.ready || model.busy)
+                .disabled(model.busy)
+                Section("Publishing paths") {
+                    TextField("Public URL prefix (optional)", text: $publicPathPrefix)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Upload subfolder (optional)", text: $uploadSubfolder)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
+                    Button("Save publishing settings") {
+                        Task {
+                            do {
+                                loadSettings(try await model.savePublishingSettings(
+                                    publicPathPrefix: publicPathPrefix, uploadSubfolder: uploadSubfolder))
+                                status = "Publishing settings saved."
+                            } catch { status = error.localizedDescription }
+                        }
+                    }.disabled(!settingsChanged || !model.ready || model.busy)
+                }.disabled(model.busy)
+                if settingsChanged { Text("Save publishing settings before publishing.") }
+                Button("Publish website") { confirmingPublish = true }.disabled(!model.ready || model.busy || settingsChanged)
                 if model.busy { ProgressView() }
                 Text(model.status)
                 Text("Credentials and trusted SFTP keys are kept in Keychain. FTPS validates the server certificate; SFTP requires a trusted server key.")
@@ -73,8 +108,9 @@ struct HostingView: View {
             }
             .task {
                 if let data = HostingCredentials.load(),
-                   let connection = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    status = "Saved hosting: \(connection["host"] as? String ?? "")."
+                   let destination = try? JSONDecoder().decode(HostingDestination.self, from: data) {
+                    if !settingsChanged { loadSettings(destination) }
+                    status = "Saved hosting: \(destination.host)."
                 }
             }
             .sheet(item: $source) { source in
@@ -83,7 +119,13 @@ struct HostingView: View {
                     switch result {
                     case .success(let code):
                         Task {
-                            do { status = try await model.importHostingQR(code) }
+                            do {
+                                status = try await model.importHostingQR(code)
+                                if let data = HostingCredentials.load(),
+                                   let destination = try? JSONDecoder().decode(HostingDestination.self, from: data) {
+                                    loadSettings(destination)
+                                }
+                            }
                             catch { status = error.localizedDescription }
                         }
                     case .failure(let error): status = error.localizedDescription

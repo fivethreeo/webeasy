@@ -158,7 +158,9 @@ test("homepage is hidden from menus but retains its named route and home-linked 
   for (const file of files) {
     const document = dom(file.html);
     assert.equal(document.querySelector('.site-menu a[href="about/"]'), null);
-    assert.equal(document.querySelector(".site-header > .site-logo").getAttribute("href"), "/");
+    assert.equal(document.querySelector(".site-header > .site-logo").getAttribute("href"), "./");
+    const hosted = new JSDOM(file.html, { url: `http://example.test/host/${file.path}` }).window.document;
+    assert.equal(hosted.querySelector(".site-logo").href, "http://example.test/host/");
     assert.equal(document.querySelector(".site-logo img").getAttribute("src"), "assets/logo.svg");
   }
   assert.ok(files.some((file) => file.path === "about/index.html"));
@@ -166,6 +168,28 @@ test("homepage is hidden from menus but retains its named route and home-linked 
   project.homePageId = project.pages[0].children[0].id;
   for (const file of renderSite(project, catalog)) {
     assert.equal(dom(file.html).querySelector('.subpage-navigation a[href="about/team/"]'), null);
+  }
+});
+
+test("an explicit public URL prefix controls home links without changing content or generated file paths", () => {
+  const project = normalize(input);
+  const files = renderSite(project, catalog, { publicPathPrefix: "/host/site/" });
+  assert.deepEqual(files.map((file) => file.path), renderSite(project, catalog).map((file) => file.path));
+  for (const file of files) {
+    const document = new JSDOM(file.html, { url: `http://example.test/host/site/${file.path}` }).window.document;
+    assert.equal(document.querySelector(".site-logo").getAttribute("href"), "/host/site/");
+    assert.equal(document.querySelector(".site-logo").href, "http://example.test/host/site/");
+    assert.equal(document.querySelector(".site-logo img").src, "http://example.test/host/site/assets/logo.svg");
+    assert.equal(document.querySelector('.site-menu a[href="news/"]').href, "http://example.test/host/site/news/");
+  }
+  assert.equal(project.publicPathPrefix, undefined);
+  assert.throws(() => renderSite(project, catalog, { publicPathPrefix: "/host/../private/" }));
+});
+
+test("Rsbuild example home links stay in the example site rather than returning to the catalog", () => {
+  for (const file of renderSite(normalize(input), catalog, { homeHref: "home.html" })) {
+    const document = new JSDOM(file.html, { url: `http://example.test/${file.path}` }).window.document;
+    assert.equal(document.querySelector(".site-logo").href, "http://example.test/home.html");
   }
 });
 

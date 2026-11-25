@@ -174,15 +174,18 @@ test("page links save and navigate in previews, and the logo returns home withou
     getSelection().removeAllRanges(); getSelection().addRange(range);
   });
   await page.getByRole("button", { name: "Link", exact: true }).first().click();
+  await expect(page.getByLabel("Link text", { exact: true })).toHaveValue("Visit our team");
+  await expect(page.getByLabel("Link text", { exact: true })).toHaveAttribute("readonly", "");
   await page.getByLabel("Page or subpage").selectOption("about/team/");
   await page.getByRole("button", { name: "Insert link", exact: true }).click();
   await expect(field.locator("a")).toHaveAttribute("href", "about/team/");
+  await expect(field.locator("a")).toHaveText("Visit our team");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].content)).toContain('href="about/team/"');
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.locator('#preview .site-menu a[href="about/"]')).toHaveCount(0);
   const logo = page.locator("#preview .site-logo");
-  await expect(logo).toHaveAttribute("href", "/");
+  await expect(logo).toHaveAttribute("href", "./");
   await expect.poll(() => logo.locator("img").evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
   const headerBox = await page.locator("#preview .site-header").boundingBox();
   const logoBox = await logo.boundingBox();
@@ -236,6 +239,26 @@ test("native fields choose home/subpage links, edit and remove links, reject uns
   await expect(field.locator("a")).toHaveCount(0);
   await expect(field).toHaveText("Selected text");
   await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<a");
+});
+
+test("adding a link wraps selected formatted text without replacing its surrounding content", async ({ page }) => {
+  await openField(page, "<p>Before <strong>our team</strong> after</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field.querySelector("strong"));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect(page.getByLabel("Link text", { exact: true })).toHaveValue("our team");
+  await page.getByLabel("Page or subpage").selectOption("about/team/");
+  await page.getByRole("button", { name: "Insert link", exact: true }).click();
+  await expect(field.locator("a")).toHaveText("our team");
+  await expect(field.locator("a")).toHaveAttribute("href", "about/team/");
+  await expect(field.locator("strong")).toHaveText("our team");
+  await expect(field).toHaveText("Before our team after");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="about/team/"');
 });
 
 test("inline marks toggle on the selected word and emphasis works at the caret", async ({ page }) => {
@@ -298,6 +321,37 @@ test("native generation engine normalizes content and renders portable website f
     version: 1, pages: [{ id: "invalid", title: "Bad slug", slug: "../escape", date: "2026-01-01" }], news: [], media: [],
   }))));
   expect(invalid.error).toBeTruthy();
+});
+
+test("native publishing settings validate independently and compiled links use the public prefix", async ({ page }) => {
+  await page.goto("/generator.html");
+  const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
+  const result = await page.evaluate(({ project, catalog }) => {
+    const settings = JSON.parse(window.WebeasyGenerator.readPublishingSettings(JSON.stringify({
+      publicPathPrefix: "/host/site", uploadSubfolder: "site/",
+    })));
+    const compiled = JSON.parse(window.WebeasyGenerator.compile(JSON.stringify({
+      project, catalog, publicPathPrefix: settings.settings.publicPathPrefix,
+    })));
+    const invalid = JSON.parse(window.WebeasyGenerator.readPublishingSettings(JSON.stringify({
+      publicPathPrefix: "/host/", uploadSubfolder: "../outside",
+    })));
+    return { settings, compiled, invalid };
+  }, { project, catalog });
+  expect(result.settings.settings).toEqual({ publicPathPrefix: "/host/site/", uploadSubfolder: "site" });
+  expect(result.compiled.error).toBeUndefined();
+  expect(result.compiled.files.find((file) => file.path === "index.html").html).toContain('class="site-logo" href="/host/site/"');
+  expect(result.compiled.project.publicPathPrefix).toBeUndefined();
+  expect(result.compiled.project.uploadSubfolder).toBeUndefined();
+  expect(result.invalid.error).toContain("relative upload");
+});
+
+test("the Rsbuild example logo opens the example homepage rather than the catalog", async ({ page }) => {
+  await page.goto("/about/");
+  await expect(page.locator(".site-logo")).toHaveAttribute("href", "home.html");
+  await page.locator(".site-logo").click();
+  await expect(page).toHaveURL(/\/home\.html$/);
+  await expect(page.locator("h1")).toHaveText(project.pages[0].title);
 });
 
 test("hosting QR import validates the envelope and preserves credentials without putting them in content", async ({ page }) => {

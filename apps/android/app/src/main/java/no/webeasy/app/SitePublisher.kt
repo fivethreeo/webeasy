@@ -22,6 +22,11 @@ class HostKeyApproval(val host: String, val port: Int, val fingerprint: String) 
 
 object SitePublisher {
     fun publish(connection: JSONObject, root: File) {
+        val subfolder = connection.optString("uploadSubfolder")
+        require(subfolder.isEmpty() || subfolder.length <= 512 && subfolder.split("/").all {
+            it.matches(Regex("[a-zA-Z0-9._-]+")) && it != "." && it != ".."
+        }) { "Use a relative upload subfolder without parent segments." }
+        val uploadPrefix = if (subfolder.isEmpty()) "" else "$subfolder/"
         val files = root.walkTopDown().filter { it.isFile }.sortedWith(
             compareBy<File> { it.relativeTo(root).invariantSeparatorsPath == "index.html" }
                 .thenBy { it.relativeTo(root).invariantSeparatorsPath }
@@ -29,15 +34,15 @@ object SitePublisher {
         require(files.any { it.relativeTo(root).invariantSeparatorsPath == "index.html" }) { "Homepage is missing." }
         try {
             when (connection.getString("protocol")) {
-                "ftp", "ftps" -> ftp(connection, root, files)
-                "sftp" -> sftp(connection, root, files)
+                "ftp", "ftps" -> ftp(connection, root, files, uploadPrefix)
+                "sftp" -> sftp(connection, root, files, uploadPrefix)
                 else -> error("Unsupported publishing protocol.")
             }
         } catch (error: HostKeyApproval) { throw error }
         catch (_: Exception) { throw IOException("Publishing failed. Check the destination, permissions, certificate or saved server key. Some files may already have been uploaded.") }
     }
 
-    private fun ftp(connection: JSONObject, root: File, files: List<File>) {
+    private fun ftp(connection: JSONObject, root: File, files: List<File>, uploadPrefix: String) {
         val client = if (connection.getString("protocol") == "ftps") FTPSClient(false).apply {
             val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
             factory.init(null as KeyStore?)
@@ -57,7 +62,7 @@ object SitePublisher {
             check(client.changeWorkingDirectory(connection.getString("directory")))
             val directories = mutableSetOf("")
             for (file in files) {
-                val path = file.relativeTo(root).invariantSeparatorsPath
+                val path = uploadPrefix + file.relativeTo(root).invariantSeparatorsPath
                 val parts = path.split("/").dropLast(1)
                 for (index in parts.indices) {
                     val directory = parts.take(index + 1).joinToString("/")
@@ -73,7 +78,7 @@ object SitePublisher {
         } finally { if (client.isConnected) client.disconnect() }
     }
 
-    private fun sftp(connection: JSONObject, root: File, files: List<File>) {
+    private fun sftp(connection: JSONObject, root: File, files: List<File>, uploadPrefix: String) {
         val host = connection.getString("host")
         val port = connection.getInt("port")
         val pin = connection.optString("_hostKeyFingerprint").takeIf(String::isNotEmpty)
@@ -103,7 +108,7 @@ object SitePublisher {
                 check(attributes.type == net.schmizz.sshj.sftp.FileMode.Type.DIRECTORY)
                 val directories = mutableSetOf<String>()
                 for (file in files) {
-                    val relative = file.relativeTo(root).invariantSeparatorsPath
+                    val relative = uploadPrefix + file.relativeTo(root).invariantSeparatorsPath
                     val remote = directory.trimEnd('/') + "/" + relative
                     val parent = remote.substringBeforeLast("/")
                     if (directories.add(parent)) sftp.mkdirs(parent)

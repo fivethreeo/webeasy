@@ -123,6 +123,7 @@ function linkDetails(project, selectedText, current) {
   const text = document.createElement("input");
   text.type = "text";
   text.value = current?.textContent ?? selectedText;
+  text.readOnly = Boolean(selectedText) && !current;
   textLabel.append(text);
   if (url.value && [...pages.options].some((option) => option.value === url.value)) pages.value = url.value;
   const validate = () => url.setCustomValidity(url.value && !safeLinkHref(url.value.trim())
@@ -150,7 +151,9 @@ function linkDetails(project, selectedText, current) {
   validate();
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => {
-      resolve(dialog.returnValue === "insert" ? { href: url.value.trim(), text: text.value || url.value.trim() } : null);
+      resolve(dialog.returnValue === "insert" ? {
+        href: url.value.trim(), text: !current && selectedText ? selectedText : text.value || url.value.trim(),
+      } : null);
       dialog.remove();
     }, { once: true });
     dialog.showModal();
@@ -408,7 +411,7 @@ function renderEditor() {
     $("preview").querySelectorAll('a[href]:not([href^="#"])').forEach((link) => link.addEventListener("click", run(() => {
       const href = link.getAttribute("href");
       const path = href.split(/[?#]/)[0].replace(/^\//, "").replace(/index\.html$/, "");
-      if (path === "") {
+      if (path === "" || path === "./") {
         selected = normalized.homePageId; renderEditor(); renderLists(); return;
       }
       const target = pageRoutes(project.pages).find((item) => item.route.slice(1) === path)

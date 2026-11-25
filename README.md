@@ -144,7 +144,8 @@ on the next launch.
 Choose **Use as homepage** in a native page/subpage form to select `index.html`.
 Existing projects default to their first top-level page. The selected page
 keeps its named URL and layout. Removing it falls back to the first remaining
-top-level page. The main menu lists top-level pages, marking the current page
+top-level page. The chosen homepage is omitted from the menus. A home-linked logo
+sits to the left of the main menu. The main menu lists other top-level pages, marking the current page
 or its top-level ancestor with `class="active"`. News is active on its listing
 and article pages. Pages with subpages have an
 `<aside>` navigation shared by their descendants, with the current link marked
@@ -158,8 +159,20 @@ Unrelated remote files, previously published pages, and unused remote media are
 not deleted automatically. A failed upload can leave a partially updated website;
 retry after correcting the connection or permissions.
 
+In Hosting, set **Public URL prefix** and **Upload subfolder** separately, then
+choose **Save publishing settings**. Use `/` for a domain-root website and leave
+the upload subfolder blank to publish directly into the QR's saved destination.
+For a nested deployment, the public prefix is its full public path (for example
+`/site/`), while the upload subfolder is relative to the saved FTP/SFTP directory
+(for example `site`). A blank public prefix uses relative home links. Publishing
+uses these settings; exports and previews stay portable. Settings are kept with
+secured hosting credentials, not in the content database or exported website.
+The Rsbuild catalog at `/` is separate from its generated example site, whose
+homepage is `/home.html`; example logos return there rather than to the catalog.
+
 Content supports headings, paragraphs, bold, italic, strike, underline, emphasis,
-bulleted/numbered lists, and blockquotes. Phone images and videos are inserted
+bulleted/numbered lists, blockquotes, and links. **Link** accepts a URL or a
+page/subpage choice; existing links can be edited or removed. Phone images and videos are inserted
 as `<figure>` containing `<img>` or `<video><source>`, with optional `<figcaption>`.
 The image dialog provides alternative text. Imported files are copied into
 app-owned media storage; content refers to portable `media/<filename>` paths,

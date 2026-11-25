@@ -159,8 +159,41 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
            let fingerprint = previous._hostKeyFingerprint {
             connection["_hostKeyFingerprint"] = fingerprint
         }
+        if let data = HostingCredentials.load(),
+           let previous = try? JSONDecoder().decode(HostingDestination.self, from: data),
+           connection["protocol"] as? String == previous.protocol,
+           connection["host"] as? String == previous.host, connection["port"] as? Int == previous.port,
+           connection["directory"] as? String == previous.directory {
+            connection["publicPathPrefix"] = previous.publicPathPrefix
+            connection["uploadSubfolder"] = previous.uploadSubfolder
+        }
         try HostingCredentials.save(JSONSerialization.data(withJSONObject: connection))
         return "Saved hosting: \(connection["host"] as? String ?? ""). Not connected yet."
+    }
+
+    func savePublishingSettings(publicPathPrefix: String, uploadSubfolder: String) async throws -> HostingDestination {
+        guard ready, !busy else { throw ContentError.invalid("Wait for the app to finish its current operation.") }
+        busy = true
+        defer { busy = false }
+        let settings = ["publicPathPrefix": publicPathPrefix, "uploadSubfolder": uploadSubfolder]
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: settings), as: UTF8.self)
+        let argument = try JSONSerialization.data(withJSONObject: serialized, options: .fragmentsAllowed)
+        let result = try await generator.evaluateJavaScript(
+            "window.WebeasyGenerator.readPublishingSettings(\(String(decoding: argument, as: UTF8.self)))")
+        guard let result = result as? String, let data = result.data(using: .utf8),
+              let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ContentError.invalid("Cannot validate publishing settings.")
+        }
+        if let error = output["error"] as? String { throw ContentError.invalid(error) }
+        guard let normalized = output["settings"] as? [String: String],
+              let saved = HostingCredentials.load(),
+              var destination = try? JSONDecoder().decode(HostingDestination.self, from: saved) else {
+            throw ContentError.invalid("Import your hosting setup QR first.")
+        }
+        destination.publicPathPrefix = normalized["publicPathPrefix"]
+        destination.uploadSubfolder = normalized["uploadSubfolder"]
+        try HostingCredentials.save(JSONEncoder().encode(destination))
+        return destination
     }
 
     func newNode(_ kind: ContentKind, siblings: [ContentNode]) -> ContentNode {
@@ -179,12 +212,13 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         ["version": 1, "homePageId": homePageID.map { $0 as Any } ?? NSNull(), "pages": pages.map(\.json), "news": news.map(\.json), "media": media]
     }
 
-    private func generate(_ compile: Bool) async throws -> [String: Any] {
+    private func generate(_ compile: Bool, publicPathPrefix: String? = nil) async throws -> [String: Any] {
         guard let store else { throw ContentError.invalid("Storage unavailable.") }
         var input = project
         if compile {
             let catalogData = try Data(contentsOf: store.websiteRoot.appendingPathComponent("catalog.json"))
             input = ["project": input, "catalog": try JSONSerialization.jsonObject(with: catalogData)]
+            if let publicPathPrefix { input["publicPathPrefix"] = publicPathPrefix }
         }
         let data = try JSONSerialization.data(withJSONObject: input)
         let serialized = String(decoding: data, as: UTF8.self)
@@ -233,7 +267,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             do {
                 let nodes = try snapshot()
                 let savedHome = homePageID
-                let output = try await generate(true)
+                let output = try await generate(true, publicPathPrefix: destination?.publicPathPrefix)
                 let data = try JSONSerialization.data(withJSONObject: output)
                 if export || publish {
                     let projectData = try JSONSerialization.data(withJSONObject: output["project"]!)

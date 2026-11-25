@@ -51,6 +51,11 @@ struct WebsitePreview: UIViewRepresentable {
                     return
                 }
             }
+            if url.isFileURL && url.resolvingSymlinksInPath().path == root.path {
+                decisionHandler(.cancel)
+                webView.loadFileURL(root.appendingPathComponent(homePath), allowingReadAccessTo: root)
+                return
+            }
             guard url.isFileURL,
                   url.resolvingSymlinksInPath().path.hasPrefix(root.path + "/") else {
                 decisionHandler(.cancel)

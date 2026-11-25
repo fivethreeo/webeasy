@@ -67,7 +67,7 @@ await writeFile(path.join(output, "showcase.html"), document("Component showcase
   <div class="grid">${cards(catalog.components)}</div>`, "./"));
 await writeFile(path.join(output, "catalog.json"), `${JSON.stringify(catalog, null, 2)}\n`);
 const project = await loadProject(source);
-const published = renderSite(project, catalog);
+const published = renderSite(project, catalog, { homeHref: "home.html" });
 for (const file of published) {
   const destination = path.join(output, file.path === "index.html" ? "home.html" : file.path);
   await mkdir(path.dirname(destination), { recursive: true });

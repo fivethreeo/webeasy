@@ -5,6 +5,17 @@ struct PublishingOperationTests {
     enum Failure: Error { case denied }
 
     static func main() async throws {
+        let rootPrefix = try PublishingPaths.uploadPrefix(nil)
+        let nestedPrefix = try PublishingPaths.uploadPrefix("preview/build")
+        precondition(rootPrefix == "")
+        precondition(nestedPrefix == "preview/build/")
+        for path in ["/site", "../site", "site/../outside", "site//outside", "site/", "site\\outside",
+                     "site/%2e%2e/outside", "site\noutside", String(repeating: "x", count: 513)] {
+            do {
+                _ = try PublishingPaths.uploadPrefix(path)
+                preconditionFailure("Unsafe upload subfolder accepted.")
+            } catch PublishingPaths.Invalid.subfolder {}
+        }
         let success = Progress(totalUnitCount: 1)
         let successClosed = DispatchSemaphore(value: 0)
         success.cancellationHandler = { successClosed.signal() }

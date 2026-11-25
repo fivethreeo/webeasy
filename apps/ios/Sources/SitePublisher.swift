@@ -13,6 +13,8 @@ struct HostingDestination: Codable, Sendable {
     let password: String
     let directory: String
     var _hostKeyFingerprint: String?
+    var publicPathPrefix: String?
+    var uploadSubfolder: String?
 }
 
 struct HostKeyApproval: Error, Identifiable, Sendable {
@@ -52,6 +54,7 @@ private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unc
 
 enum SitePublisher {
     static func publish(_ destination: HostingDestination, root: URL) async throws {
+        let uploadPrefix = try PublishingPaths.uploadPrefix(destination.uploadSubfolder)
         let manager = FileManager.default
         guard let enumerator = manager.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else {
             throw ContentError.invalid("Cannot read the generated website.")
@@ -69,8 +72,8 @@ enum SitePublisher {
         }
         guard files.contains(where: { $0.0 == "index.html" }) else { throw ContentError.invalid("Homepage is missing.") }
         do {
-            if destination.protocol == "sftp" { try await sftp(destination, files: files) }
-            else { try await ftp(destination, files: files) }
+            if destination.protocol == "sftp" { try await sftp(destination, files: files, uploadPrefix: uploadPrefix) }
+            else { try await ftp(destination, files: files, uploadPrefix: uploadPrefix) }
         } catch let approval as HostKeyApproval { throw approval }
         catch let failure as PublishingFailure { throw ContentError.invalid(failure.localizedDescription) }
         catch { throw ContentError.invalid("Publishing failed. \(safeReason(error)) Check the destination, permissions, certificate or saved server key. Some files may already have been uploaded.") }
@@ -98,7 +101,7 @@ enum SitePublisher {
         }
     }
 
-    private static func ftp(_ destination: HostingDestination, files: [(String, URL)]) async throws {
+    private static func ftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
         guard ["ftp", "ftps"].contains(destination.protocol) else { throw ContentError.invalid("Unsupported protocol.") }
         var components = URLComponents()
         components.scheme = destination.protocol == "ftps" ? "ftpes" : "ftp"
@@ -113,7 +116,8 @@ enum SitePublisher {
         provider.serverTrustPolicy = .performDefaultEvaluation(validateHost: true)
         provider.securedDataConnection = true
         var directories = Set<String>()
-        for (path, file) in files {
+        for (relativePath, file) in files {
+            let path = uploadPrefix + relativePath
             let parts = path.split(separator: "/").dropLast()
             for count in 1..<(parts.count + 1) {
                 let directory = parts.prefix(count).joined(separator: "/")
@@ -143,7 +147,7 @@ enum SitePublisher {
         }
     }
 
-    private static func sftp(_ destination: HostingDestination, files: [(String, URL)]) async throws {
+    private static func sftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
         let validator = HostKeyCheck(pin: destination._hostKeyFingerprint)
         let settings = SSHClientSettings(host: destination.host, port: destination.port,
             authenticationMethod: { .passwordBased(username: destination.username, password: destination.password) },
@@ -160,7 +164,8 @@ enum SitePublisher {
             let sftp = try await client.openSFTP()
             do {
                 var directories = Set<String>()
-                for (path, file) in files {
+                for (relativePath, file) in files {
+                    let path = uploadPrefix + relativePath
                     let prefix = destination.directory == "/" ? "" : destination.directory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                     let remote = destination.directory.hasPrefix("/") ? "/" + [prefix, path].filter { !$0.isEmpty }.joined(separator: "/")
                         : [prefix, path].filter { !$0.isEmpty }.joined(separator: "/")

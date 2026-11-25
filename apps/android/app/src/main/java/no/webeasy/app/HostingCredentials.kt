@@ -24,6 +24,13 @@ class HostingCredentials(context: Context) {
     }
     fun save(connection: JSONObject) {
         val previous = load()
+        if (previous != null && connection.optString("protocol") == previous.optString("protocol") &&
+            connection.optString("host") == previous.optString("host") && connection.optInt("port") == previous.optInt("port") &&
+            connection.optString("directory") == previous.optString("directory")) {
+            for (field in listOf("publicPathPrefix", "uploadSubfolder")) {
+                if (!connection.has(field) && previous.has(field)) connection.put(field, previous.getString(field))
+            }
+        }
         if (!connection.has("_hostKeyFingerprint") && previous != null &&
             connection.optString("protocol") == "sftp" && previous.optString("protocol") == "sftp" &&
             connection.optString("host") == previous.optString("host") && connection.optInt("port") == previous.optInt("port") &&

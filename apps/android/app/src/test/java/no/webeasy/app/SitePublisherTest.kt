@@ -41,10 +41,11 @@ class SitePublisherTest {
         resolve("site/unrelated.txt").writeText("Keep me")
         resolve("store").mkdir(); resolve("store/source.json").writeText("Keep the app store")
     }
-    private fun checkFiles(root: File) {
-        assertEquals("<h1>New home</h1>", root.resolve("site/index.html").readText())
-        assertEquals("<h1>Team</h1>", root.resolve("site/about/team/index.html").readText())
-        assertEquals("body { color: green }", root.resolve("site/assets/site.css").readText())
+    private fun checkFiles(root: File, subfolder: String = "") {
+        val target = root.resolve("site").resolve(subfolder)
+        assertEquals("<h1>New home</h1>", target.resolve("index.html").readText())
+        assertEquals("<h1>Team</h1>", target.resolve("about/team/index.html").readText())
+        assertEquals("body { color: green }", target.resolve("assets/site.css").readText())
         assertEquals("Keep me", root.resolve("site/unrelated.txt").readText())
         assertEquals("Keep the app store", root.resolve("store/source.json").readText())
     }
@@ -76,6 +77,30 @@ class SitePublisherTest {
     fun ftpUploadsGeneratedFilesOverwritesExistingHomeAndPreservesUnrelatedFiles() {
         val root = remote()
         ftp(root) { port -> SitePublisher.publish(connection("ftp", port), site()); checkFiles(root) }
+    }
+
+    @Test
+    fun ftpUsesRelativeUploadSubfoldersAndOnlyOverwritesFilesInsideThem() {
+        val root = remote()
+        root.resolve("site/preview/build").mkdirs()
+        root.resolve("site/preview/build/index.html").writeText("A much longer old homepage that must be truncated")
+        ftp(root) { port ->
+            val destination = connection("ftp", port).put("uploadSubfolder", "preview/build")
+            SitePublisher.publish(destination, site())
+            checkFiles(root, "preview/build")
+            SitePublisher.publish(destination, site())
+            checkFiles(root, "preview/build")
+            assertEquals("Old home", root.resolve("site/index.html").readText())
+        }
+    }
+
+    @Test
+    fun invalidUploadSubfoldersFailBeforeConnecting() {
+        for (path in listOf("/site", "../site", "site/../outside", "site//outside", "site/", "site\\outside", "site/%2e%2e/outside")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                SitePublisher.publish(connection("ftp", 1).put("uploadSubfolder", path), site())
+            }
+        }
     }
 
     @Test
@@ -129,6 +154,12 @@ class SitePublisherTest {
             destination.put("_hostKeyFingerprint", key.fingerprint)
             SitePublisher.publish(destination, site())
             checkFiles(root)
+            destination.put("uploadSubfolder", "preview/build")
+            SitePublisher.publish(destination, site())
+            checkFiles(root, "preview/build")
+            root.resolve("site/preview/build/index.html").writeText("A much longer old homepage that must be truncated")
+            SitePublisher.publish(destination, site())
+            checkFiles(root, "preview/build")
             val authenticated = authentications.get()
             destination.put("_hostKeyFingerprint", "SHA256:wrong-key")
             assertThrows(IOException::class.java) { SitePublisher.publish(destination, site()) }

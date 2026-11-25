@@ -1,5 +1,6 @@
 import { escapeHtml, render } from "./render.js";
-import { localMediaPath } from "./rich-text.js";
+import { localMediaPath, safeLinkHref } from "./rich-text.js";
+import { normalizePublishingSettings } from "./publishing-settings.js";
 
 const reserved = new Set(["news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"]);
 
@@ -151,7 +152,10 @@ function subpageNavigation(entry, homeId) {
     <h2>Subpages</h2><ul class="stack">${children}</ul></nav></aside>`;
 }
 
-export function renderSite(project, catalog) {
+export function renderSite(project, catalog, options = {}) {
+  const { publicPathPrefix } = normalizePublishingSettings({ publicPathPrefix: options.publicPathPrefix });
+  const homeHref = options.homeHref ?? (publicPathPrefix || "./");
+  if (homeHref !== "./" && !safeLinkHref(homeHref)) throw new Error("Invalid website home URL.");
   const template = (id) => {
     const source = catalog.templates.find((item) => item.id === id)?.source;
     if (!source) throw new Error(`Template is missing: ${id}`);
@@ -180,7 +184,7 @@ export function renderSite(project, catalog) {
     const newsIndex = file === "news/index.html" || (file === "index.html" && !pages.length);
     const newsActive = newsIndex || file.startsWith("news/");
     const navigation = `<header class="cluster site-header">
-    <a class="site-logo" href="/" aria-label="Home"${currentId === home?.id && home ? ' aria-current="page"' : ""}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
+    <a class="site-logo" href="${escapeHtml(homeHref)}" aria-label="Home"${currentId === home?.id && home ? ' aria-current="page"' : ""}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
     <nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId, home?.id)}
     <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav></header>`;
     return `<!doctype html>

@@ -17,6 +17,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
@@ -64,6 +66,46 @@ class MainActivity : ComponentActivity() {
     private var pendingHostKey by mutableStateOf<HostKeyApproval?>(null)
     private val hosting by lazy { HostingCredentials(this) }
     private var hostingStatus by mutableStateOf("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
+    private var publicPathPrefix by mutableStateOf("")
+    private var uploadSubfolder by mutableStateOf("")
+    private var savedPublicPathPrefix by mutableStateOf("")
+    private var savedUploadSubfolder by mutableStateOf("")
+
+    private fun loadPublishingSettings(connection: JSONObject) {
+        publicPathPrefix = connection.optString("publicPathPrefix")
+        uploadSubfolder = connection.optString("uploadSubfolder")
+        savedPublicPathPrefix = publicPathPrefix
+        savedUploadSubfolder = uploadSubfolder
+    }
+    private fun publishingSettingsChanged() = publicPathPrefix != savedPublicPathPrefix || uploadSubfolder != savedUploadSubfolder
+
+    private fun savePublishingSettings() {
+        if (!ready || busy) return
+        busy = true
+        val input = JSONObject().put("publicPathPrefix", publicPathPrefix).put("uploadSubfolder", uploadSubfolder)
+        generator.evaluateJavascript("window.WebeasyGenerator.readPublishingSettings(${JSONObject.quote(input.toString())})") { serialized ->
+            val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }.getOrNull()
+            val settings = output?.optJSONObject("settings")
+            if (settings == null) {
+                hostingStatus = output?.optString("error") ?: "Cannot validate publishing settings."
+                busy = false
+                return@evaluateJavascript
+            }
+            worker.execute {
+                runCatching {
+                    val connection = hosting.load() ?: error("Import your hosting setup QR first.")
+                    connection.put("publicPathPrefix", settings.getString("publicPathPrefix"))
+                    connection.put("uploadSubfolder", settings.getString("uploadSubfolder"))
+                    hosting.save(connection)
+                    connection
+                }.fold(onSuccess = { connection -> runOnUiThread {
+                    loadPublishingSettings(connection); hostingStatus = "Publishing settings saved."; busy = false
+                } }, onFailure = { runOnUiThread {
+                    hostingStatus = it.message ?: "Cannot save publishing settings."; busy = false
+                } })
+            }
+        }
+    }
 
     private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null,
                               val contentKey: String? = null)
@@ -119,7 +161,10 @@ class MainActivity : ComponentActivity() {
             if (connection == null) { hostingStatus = output?.optString("error") ?: "Cannot read this hosting QR."; return@evaluateJavascript }
             worker.execute {
                 runCatching { hosting.save(connection) }.fold(
-                    onSuccess = { runOnUiThread { hostingStatus = "Saved hosting: ${connection.getString("host")}. Not connected yet." } },
+                    onSuccess = { runOnUiThread {
+                        loadPublishingSettings(connection)
+                        hostingStatus = "Saved hosting: ${connection.getString("host")}. Not connected yet."
+                    } },
                     onFailure = { runOnUiThread { hostingStatus = "Cannot save hosting securely." } })
             }
         }
@@ -139,8 +184,11 @@ class MainActivity : ComponentActivity() {
                 drafts.markSaved(drafts.capture(content))
                 project = content; catalog = examples; status = "Local SQLite. Save changes before closing."
             } }, onFailure = { runOnUiThread { status = it.message ?: "Cannot open local storage." } })
-            runCatching { hosting.load()?.getString("host") }.getOrNull()?.let { host ->
-                runOnUiThread { hostingStatus = "Saved hosting: $host." }
+            runCatching { hosting.load() }.getOrNull()?.let { connection ->
+                runOnUiThread {
+                    loadPublishingSettings(connection)
+                    hostingStatus = "Saved hosting: ${connection.getString("host")}."
+                }
             }
         }
         setContent {
@@ -239,22 +287,38 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (tab == 4) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(hostingStatus)
-                Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, enabled = !busy) {
                     Text("Read QR from picture")
                 }
-                Button(onClick = { runCatching { qrCamera.launch(null) }.onFailure { hostingStatus = "Camera is unavailable." } }) {
+                Button(onClick = { runCatching { qrCamera.launch(null) }.onFailure { hostingStatus = "Camera is unavailable." } }, enabled = !busy) {
                     Text("Take a QR picture")
                 }
                 TextButton(onClick = {
                     worker.execute {
                         runCatching { hosting.remove() }.fold(
-                            onSuccess = { runOnUiThread { hostingStatus = "Hosting credentials removed." } },
+                            onSuccess = { runOnUiThread {
+                                loadPublishingSettings(JSONObject())
+                                hostingStatus = "Hosting credentials removed."
+                            } },
                             onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
                     }
-                }) { Text("Forget hosting") }
-                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy) { Text("Publish website") }
+                }, enabled = !busy) { Text("Forget hosting") }
+                OutlinedTextField(value = publicPathPrefix, onValueChange = { publicPathPrefix = it },
+                    label = { Text("Public URL prefix (optional)") }, singleLine = true, enabled = !busy,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = uploadSubfolder, onValueChange = { uploadSubfolder = it },
+                    label = { Text("Upload subfolder (optional)") }, singleLine = true, enabled = !busy,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    modifier = Modifier.fillMaxWidth())
+                Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
+                Button(onClick = ::savePublishingSettings, enabled = ready && !busy && publishingSettingsChanged()) {
+                    Text("Save publishing settings")
+                }
+                if (publishingSettingsChanged()) Text("Save publishing settings before publishing.")
+                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy && !publishingSettingsChanged()) { Text("Publish website") }
                 if (busy) CircularProgressIndicator()
                 Text("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }
@@ -401,6 +465,7 @@ class MainActivity : ComponentActivity() {
         val destination = if (publish) runCatching { hosting.load() }.getOrNull() else null
         if (publish && destination == null) { busy = false; status = "Import your hosting setup QR first."; return }
         val input = if (compile) JSONObject().put("project", project).put("catalog", catalog) else project!!
+        if (compile && destination != null) input.put("publicPathPrefix", destination.optString("publicPathPrefix"))
         generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "compile" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
             val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }
             if (output.isFailure || output.getOrNull()?.has("error") == true) {
