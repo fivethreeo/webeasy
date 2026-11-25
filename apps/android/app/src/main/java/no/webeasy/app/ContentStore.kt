@@ -6,6 +6,12 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.Matrix
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.BitmapDrawable
+import android.media.ExifInterface
+import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -14,6 +20,7 @@ import java.time.LocalDate
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.math.roundToInt
 
 class ContentStore(private val context: Context) :
     SQLiteOpenHelper(context, "webeasy.sqlite", null, 2) {
@@ -205,7 +212,70 @@ class ContentStore(private val context: Context) :
         }
     }
 
-    fun importMedia(input: InputStream, mimeType: String, originalName: String, basename: String = ""): JSONObject {
+    private fun imageSize(originalWidth: Int, originalHeight: Int, width: Int?): Pair<Int, Int> {
+        require(originalWidth > 0 && originalHeight > 0) { "Cannot read this image. Choose JPEG or PNG." }
+        val targetWidth = minOf(width ?: originalWidth, originalWidth)
+        val targetHeight = maxOf(1, (originalHeight.toDouble() * targetWidth / originalWidth).roundToInt())
+        require(targetWidth.toLong() * targetHeight <= 32_000_000) {
+            "Image is too large to optimize. Choose a smaller maximum width."
+        }
+        return targetWidth to targetHeight
+    }
+
+    private fun optimizedBitmap(source: File, mimeType: String, width: Int?): Bitmap {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(source)) { decoder, info, _ ->
+                val (targetWidth, targetHeight) = imageSize(info.size.width, info.size.height, width)
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                decoder.setTargetSize(targetWidth, targetHeight)
+            }
+            require(drawable !is AnimatedImageDrawable) {
+                "Animated images must be imported with width and quality left blank."
+            }
+            return (drawable as? BitmapDrawable)?.bitmap ?: error("Cannot resize this image. Choose JPEG or PNG.")
+        }
+        require(mimeType !in setOf("image/gif", "image/webp")) {
+            "On this Android version, import GIF and WebP with width and quality left blank."
+        }
+        val orientation = runCatching {
+            ExifInterface(source.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(source.path, bounds)
+        val rotated = orientation in 5..8
+        val (targetWidth, targetHeight) = imageSize(
+            if (rotated) bounds.outHeight else bounds.outWidth,
+            if (rotated) bounds.outWidth else bounds.outHeight, width)
+        val options = BitmapFactory.Options().apply { inSampleSize = 1 }
+        val originalWidth = if (rotated) bounds.outHeight else bounds.outWidth
+        while (originalWidth / (options.inSampleSize * 2) >= targetWidth) options.inSampleSize *= 2
+        val image = BitmapFactory.decodeFile(source.path, options) ?: error("Cannot decode this image. Choose JPEG or PNG.")
+        val matrix = Matrix().apply {
+            when (orientation) {
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f); postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+                ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(-90f); postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(-90f)
+            }
+        }
+        var upright = image
+        var result: Bitmap? = null
+        try {
+            upright = Bitmap.createBitmap(image, 0, 0, image.width, image.height, matrix, true)
+            val resized = Bitmap.createScaledBitmap(upright, targetWidth, targetHeight, true)
+            result = resized
+            return resized
+        } finally {
+            if (image !== result) image.recycle()
+            if (upright !== image && upright !== result) upright.recycle()
+        }
+    }
+
+    fun importMedia(input: InputStream, mimeType: String, originalName: String, basename: String = "",
+                    width: Int? = null, quality: Int? = null): JSONObject {
         val id = UUID.randomUUID().toString()
         val requested = basename.trim()
         val stem = requested.ifEmpty { id }
@@ -223,6 +293,10 @@ class ContentStore(private val context: Context) :
         }
         try {
             input.use { source ->
+                require((width == null || width in 1..16384) && (quality == null || quality in 1..100) &&
+                    (mimeType.startsWith("image/") || (width == null && quality == null))) {
+                    "Image width must be 1-16384 pixels and JPEG quality 1-100%."
+                }
                 require(requested.isEmpty() || requested.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,79}"))) {
                     "Use up to 80 letters, numbers, hyphens, or underscores for the basename, without an extension."
                 }
@@ -230,10 +304,22 @@ class ContentStore(private val context: Context) :
             }
             require(temporary.length() > 0) { "The selected media file is empty." }
             var type = mimeType.lowercase()
-            if (type in setOf("image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence")) {
+            if (type.startsWith("image/") && (width != null || quality != null)) {
+                val image = optimizedBitmap(temporary, type, width)
+                try {
+                    val png = type == "image/png" || image.hasAlpha()
+                    type = if (png) "image/png" else "image/jpeg"
+                    destination = nextFile(if (png) "png" else "jpg")
+                    destination.outputStream().use {
+                        require(image.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, quality ?: 85, it)) {
+                            "Cannot save the resized image."
+                        }
+                    }
+                } finally { image.recycle() }
+            } else if (type in setOf("image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence")) {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(temporary.path, bounds)
-                val options = BitmapFactory.Options()
+                val options = BitmapFactory.Options().apply { inSampleSize = 1 }
                 while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > 2560) options.inSampleSize *= 2
                 val image = BitmapFactory.decodeFile(temporary.path, options) ?: error("Cannot decode this image. Choose JPEG or PNG.")
                 try {

@@ -2,6 +2,7 @@ import Foundation
 import SQLite3
 import UIKit
 import UniformTypeIdentifiers
+import ImageIO
 
 enum ContentError: LocalizedError {
     case invalid(String)
@@ -276,8 +277,58 @@ final class ContentStore: @unchecked Sendable {
         try WebsiteFiles.file(root, path)
     }
 
-    func importMedia(_ source: URL, kind: String, typeIdentifier: String, basename: String = "") throws -> [String: Any] {
+    private func optimizedImage(_ source: URL, width: Int?, quality: Int?) throws -> (data: Data, mime: String) {
+        guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+              let rawWidth = properties[kCGImagePropertyPixelWidth] as? Int,
+              let rawHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+              rawWidth > 0, rawHeight > 0 else {
+            throw ContentError.invalid("Cannot read this image. Choose JPEG or PNG.")
+        }
+        guard CGImageSourceGetCount(imageSource) == 1 else {
+            throw ContentError.invalid("Animated images must be imported with width and quality left blank.")
+        }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        let rotated = (5...8).contains(orientation)
+        let originalWidth = rotated ? rawHeight : rawWidth
+        let originalHeight = rotated ? rawWidth : rawHeight
+        let targetWidth = min(width ?? originalWidth, originalWidth)
+        let targetHeight = max(1, Int((Double(originalHeight) * Double(targetWidth) / Double(originalWidth)).rounded()))
+        guard Double(targetWidth) * Double(targetHeight) <= 32_000_000 else {
+            throw ContentError.invalid("Image is too large to optimize. Choose a smaller maximum width.")
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(targetWidth, targetHeight),
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+            throw ContentError.invalid("Cannot resize this image. Choose JPEG or PNG.")
+        }
+        let alpha = [CGImageAlphaInfo.first, .last, .premultipliedFirst, .premultipliedLast, .alphaOnly]
+            .contains(thumbnail.alphaInfo)
+        let png = CGImageSourceGetType(imageSource) as String? == UTType.png.identifier || alpha
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = !png
+        let size = CGSize(width: CGFloat(targetWidth), height: CGFloat(targetHeight))
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            UIImage(cgImage: thumbnail).draw(in: CGRect(origin: .zero, size: size))
+        }
+        guard let data = png ? image.pngData() : image.jpegData(compressionQuality: CGFloat(quality ?? 85) / 100) else {
+            throw ContentError.invalid("Cannot save the resized image.")
+        }
+        return (data, png ? "image/png" : "image/jpeg")
+    }
+
+    func importMedia(_ source: URL, kind: String, typeIdentifier: String, basename: String = "",
+                     width: Int? = nil, quality: Int? = nil) throws -> [String: Any] {
         try queue.sync {
+            guard width == nil || (1...16384).contains(width!),
+                  quality == nil || (1...100).contains(quality!),
+                  kind == "image" || (width == nil && quality == nil) else {
+                throw ContentError.invalid("Image width must be 1-16384 pixels and JPEG quality 1-100%.")
+            }
             let id = UUID().uuidString
             let requested = basename.trimmingCharacters(in: .whitespacesAndNewlines)
             guard requested.isEmpty || requested.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$", options: .regularExpression)
@@ -300,7 +351,12 @@ final class ContentStore: @unchecked Sendable {
             let formats = ["image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
                            "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "video/ogg": "ogg"]
             var file: URL
-            if kind == "image", formats[mime] == nil {
+            if kind == "image", width != nil || quality != nil {
+                let optimized = try optimizedImage(source, width: width, quality: quality)
+                mime = optimized.mime
+                file = try nextFile(mime == "image/png" ? "png" : "jpg")
+                try optimized.data.write(to: file, options: .atomic)
+            } else if kind == "image", formats[mime] == nil {
                 guard let image = UIImage(contentsOfFile: source.path), let data = image.jpegData(compressionQuality: 0.9) else {
                     throw ContentError.invalid("Cannot read this image. Choose JPEG or PNG.")
                 }

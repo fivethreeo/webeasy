@@ -49,9 +49,14 @@
       <label class="stack">File basename (optional)<input id="media-basename" type="text" maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,79}" autocapitalize="none" spellcheck="false" aria-describedby="media-basename-help"></label>
       <p id="media-basename-help">Leave blank for an automatic name. Use letters, numbers, hyphens, or underscores, without an extension. Duplicate names get a number.</p>
       <label class="stack">Alternative text (images)<input id="media-alt" type="text"></label>
+      <div id="image-settings" class="stack">
+        <label class="stack">Maximum image width (pixels, optional)<input id="image-width" type="number" min="1" max="16384" step="1" inputmode="numeric" placeholder="1600" aria-describedby="image-settings-help"></label>
+        <label class="stack">JPEG quality (%, optional)<input id="image-quality" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="85" aria-describedby="image-settings-help"></label>
+        <p id="image-settings-help">Leave both blank for normal import without optional optimization. Width preserves proportions and never enlarges images. Resized JPEG uses 85% quality unless specified; PNG stays lossless and keeps transparency. Animated images must be imported unchanged.</p>
+      </div>
       <label class="stack">Caption (optional)<input id="media-caption" type="text"></label>
       <p>MP4 is recommended for videos. Other formats depend on the viewer's browser and codecs.</p>
-      <div class="cluster"><button value="insert">Insert figure</button><button value="cancel">Cancel</button></div>
+      <div class="cluster"><button value="insert">Insert figure</button><button value="cancel" formnovalidate>Cancel</button></div>
     </form>
   </dialog>
 </body>

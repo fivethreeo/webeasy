@@ -143,6 +143,12 @@ first successful publish from a version that supports snapshots. These are local
 content comparisons, not a check of server files or hosting settings.
 
 **Templates** opens selectable template source code, with a **Preview** action.
+Image/video details open in a full-screen native view. Image import optionally
+accepts a maximum pixel width and JPEG quality percentage; leave both blank for
+the existing import behavior. Resizing changes the saved file, preserves aspect
+ratio and orientation, and never enlarges smaller images. Resized JPEG defaults
+to 85% quality; PNG remains lossless with transparency. Animated images must be
+imported without optimization. Original photos are not modified.
 Building blocks remain available to the renderer but are not a native menu tab.
 Simple page inserts its header and content without a page wrapper. Other page
 layouts use nonsemantic containers for layout; news and article templates retain

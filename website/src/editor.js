@@ -83,16 +83,27 @@ function restoreSelection(field, savedRange = selectionRange) {
   selection.addRange(range);
   return range;
 }
-function figureDetails(kind) {
+export function figureDetails(kind) {
   const dialog = $("media-details");
   $("media-basename").value = "";
   $("media-alt").value = "";
   $("media-alt").parentElement.hidden = kind !== "image";
+  $("image-settings").hidden = kind !== "image";
+  for (const id of ["image-width", "image-quality"]) {
+    $(id).value = "";
+    $(id).disabled = kind !== "image";
+  }
   $("media-caption").value = "";
   dialog.returnValue = "";
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "insert"
-      ? { alt: $("media-alt").value, caption: $("media-caption").value, basename: $("media-basename").value.trim() } : null), { once: true });
+      ? {
+        alt: $("media-alt").value, caption: $("media-caption").value, basename: $("media-basename").value.trim(),
+        imageOptions: kind === "image" ? Object.fromEntries(
+          [["width", $("image-width").value], ["quality", $("image-quality").value]]
+            .filter(([, value]) => value !== "").map(([key, value]) => [key, Number(value)]),
+        ) : {},
+      } : null), { once: true });
     dialog.showModal();
   });
 }
@@ -267,10 +278,10 @@ export function richEditor(record, key, labelText, options = {}) {
       const mediaRange = restoreSelection(field).cloneRange();
       control.disabled = true;
       try {
-        const details = await figureDetails(kind);
+        const details = await (options.getMediaDetails ? options.getMediaDetails(kind) : figureDetails(kind));
         if (!details) { status("Figure cancelled."); restoreSelection(field, mediaRange); return; }
         status("Choose media on your phone...");
-        const media = await request("pickMedia", { kind, basename: details.basename });
+        const media = await request("pickMedia", { kind, basename: details.basename, ...details.imageOptions });
         if (!media) { status("Media selection cancelled."); return; }
         if (!contentProject.media.some((item) => item.id === media.id)) contentProject.media.push(media);
         const figure = element("figure", "stack");

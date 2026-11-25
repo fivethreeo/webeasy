@@ -25,6 +25,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.font.FontFamily
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
     private var tab by mutableIntStateOf(0)
     private val screens = mutableStateListOf<Screen>()
     private var pendingMedia: PendingMedia? = null
+    private var pendingMediaDetails by mutableStateOf<PendingMediaDetails?>(null)
     private var pendingQRPhoto: File? = null
     private val drafts = ContentDrafts()
     private var pendingBack by mutableStateOf<Screen?>(null)
@@ -121,7 +123,9 @@ class MainActivity : ComponentActivity() {
 
     private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null,
                               val contentKey: String? = null)
-    private data class PendingMedia(val id: String, val kind: String, val view: WebView, val basename: String)
+    private data class PendingMedia(val id: String, val kind: String, val view: WebView, val basename: String,
+                                    val width: Int?, val quality: Int?)
+    private data class PendingMediaDetails(val id: String, val kind: String, val view: WebView)
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val pending = pendingMedia ?: return@registerForActivityResult
@@ -134,7 +138,8 @@ class MainActivity : ComponentActivity() {
                 } ?: "media"
                 val type = contentResolver.getType(uri) ?: URLConnection.guessContentTypeFromName(name) ?: ""
                 require(type.startsWith("${pending.kind}/"))
-                store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name, pending.basename)
+                store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name,
+                    pending.basename, pending.width, pending.quality)
             }.fold(onSuccess = { media ->
                 runOnUiThread {
                     project?.getJSONArray("media")?.put(media)
@@ -268,27 +273,30 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = { pendingBack = null }) { Text("Cancel") }
                         } })
                 }
-                Scaffold(topBar = {
-                    TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy") },
-                        navigationIcon = { if (screens.isNotEmpty()) TextButton(onClick = ::back) { Text(getString(R.string.back)) } },
-                        actions = {
-                            TextButton(onClick = { generate(false) }, enabled = ready && !busy && project != null) { Text("Save") }
-                            TextButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null) { Text("Export") }
-                        })
-                }) { padding ->
-                    Column(Modifier.fillMaxSize().padding(padding)) {
-                        val screen = screens.lastOrNull()
-                        if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
-                        when {
-                            screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
-                            screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
-                                RichField(screen.record, screen.contentKey)
+                Box(Modifier.fillMaxSize()) {
+                    Scaffold(topBar = {
+                        TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy") },
+                            navigationIcon = { if (screens.isNotEmpty()) TextButton(onClick = ::back) { Text(getString(R.string.back)) } },
+                            actions = {
+                                TextButton(onClick = { generate(false) }, enabled = ready && !busy && project != null) { Text("Save") }
+                                TextButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null) { Text("Export") }
+                            })
+                    }) { padding ->
+                        Column(Modifier.fillMaxSize().padding(padding)) {
+                            val screen = screens.lastOrNull()
+                            if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
+                            when {
+                                screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
+                                screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
+                                    RichField(screen.record, screen.contentKey)
+                                }
+                                screen?.kind == "template" -> TemplateSource(screen.record!!)
+                                screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
+                                else -> RootList(revision)
                             }
-                            screen?.kind == "template" -> TemplateSource(screen.record!!)
-                            screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
-                            else -> RootList(revision)
                         }
                     }
+                    pendingMediaDetails?.let { pending -> key(pending.id) { MediaDetails(pending) } }
                 }
             }
         }
@@ -703,20 +711,87 @@ class MainActivity : ComponentActivity() {
                 val id = message.optString("id")
                 val payload = message.optJSONObject("payload") ?: JSONObject()
                 when (message.optString("method")) {
-                    "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id) }
+                    "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id, JSONObject().put("mediaDetails", true)) }
                     "change" -> { value = payload.getString("content"); record.put(key, value); changed(); respond(view, id) }
                     "resize" -> respond(view, id)
                     "pageLinks" -> respond(view, id, JSONObject().put("pages", project?.getJSONArray("pages") ?: JSONArray())
                         .put("homePageId", project?.opt("homePageId") ?: JSONObject.NULL))
+                    "mediaDetails" -> {
+                        val kind = payload.optString("kind")
+                        if (pendingMediaDetails != null || kind !in listOf("image", "video"))
+                            respond(view, id, error = "Cannot open media details.")
+                        else pendingMediaDetails = PendingMediaDetails(id, kind, view)
+                    }
                     "pickMedia" -> {
                         val kind = payload.optString("kind")
                         if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
                         else {
-                            pendingMedia = PendingMedia(id, kind, view, payload.optString("basename"))
+                            pendingMedia = PendingMedia(id, kind, view, payload.optString("basename"),
+                                if (payload.has("width")) payload.optInt("width") else null,
+                                if (payload.has("quality")) payload.optInt("quality") else null)
                             mediaPicker.launch(PickVisualMediaRequest(if (kind == "image") ActivityResultContracts.PickVisualMedia.ImageOnly else ActivityResultContracts.PickVisualMedia.VideoOnly))
                         }
                     }
                     else -> respond(view, id, error = "Unknown content-field operation.")
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun MediaDetails(pending: PendingMediaDetails) {
+        var basename by remember { mutableStateOf("") }
+        var alt by remember { mutableStateOf("") }
+        var caption by remember { mutableStateOf("") }
+        var width by remember { mutableStateOf("") }
+        var quality by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf("") }
+        fun finish(result: JSONObject? = null) {
+            pendingMediaDetails = null
+            respond(pending.view, pending.id, result ?: JSONObject.NULL)
+        }
+        BackHandler { finish() }
+        Surface(Modifier.fillMaxSize()) {
+            Scaffold(topBar = {
+                TopAppBar(title = { Text(if (pending.kind == "image") "Image details" else "Video details") },
+                    navigationIcon = { TextButton(onClick = { finish() }) { Text("Cancel") } },
+                    actions = { TextButton(onClick = {
+                        val name = basename.trim()
+                        if (name.isNotEmpty() && !name.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,79}"))) {
+                            error = "Use up to 80 letters, numbers, hyphens, or underscores for the basename, without an extension."
+                        } else {
+                            val options = JSONObject()
+                            val values = listOf(Triple("width", width, 16384), Triple("quality", quality, 100))
+                            if (pending.kind == "image" && values.any { (_, value, limit) ->
+                                value.isNotBlank() && (value.trim().toIntOrNull()?.let { it in 1..limit } != true)
+                            }) error = "Image width must be 1-16384 pixels and JPEG quality 1-100%."
+                            else {
+                                if (pending.kind == "image") values.forEach { (key, value, _) ->
+                                    if (value.isNotBlank()) options.put(key, value.trim().toInt())
+                                }
+                                finish(JSONObject().put("basename", name).put("alt", alt).put("caption", caption).put("imageOptions", options))
+                            }
+                        }
+                    }) { Text("Choose file") } })
+            }) { padding ->
+                Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedTextField(basename, { basename = it }, Modifier.fillMaxWidth(), label = { Text("File basename (optional)") }, singleLine = true)
+                    Text("Leave blank for an automatic name. Use letters, numbers, hyphens, or underscores, without an extension. Duplicate names get a number.")
+                    if (pending.kind == "image") {
+                        OutlinedTextField(alt, { alt = it }, Modifier.fillMaxWidth(), label = { Text("Alternative text") })
+                    }
+                    OutlinedTextField(caption, { caption = it }, Modifier.fillMaxWidth(), label = { Text("Caption (optional)") })
+                    if (pending.kind == "image") {
+                        Text("Image optimization (optional)", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(width, { width = it }, Modifier.fillMaxWidth(), label = { Text("Maximum width (pixels, optional)") },
+                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        OutlinedTextField(quality, { quality = it }, Modifier.fillMaxWidth(), label = { Text("JPEG quality (%, optional)") },
+                            singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        Text("Leave both blank for normal import. Width preserves proportions and never enlarges images. Resized JPEG uses 85% quality unless specified. PNG remains lossless and keeps transparency. Animated images must be imported unchanged.")
+                    } else Text("MP4 is recommended for videos.")
+                    if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
                 }
             }
         }

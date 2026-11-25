@@ -1,6 +1,10 @@
 package no.webeasy.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.media.ExifInterface
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,7 +15,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.util.Base64
 import java.util.zip.ZipFile
 
@@ -146,6 +152,95 @@ class ContentStoreTest {
         for (path in listOf("../webeasy.sqlite", "/private/file", "media/%2e%2e/file", "child/../../file")) {
             assertThrows(IllegalArgumentException::class.java) { ContentStore.safeFile(store.mediaDirectory, path) }
         }
+    }
+
+    private fun imageBytes(format: Bitmap.CompressFormat): ByteArray {
+        val image = Bitmap.createBitmap(160, 80, Bitmap.Config.ARGB_8888)
+        try {
+            for (y in 0 until image.height) for (x in 0 until image.width) {
+                image.setPixel(x, y, Color.argb(96, x * 37 % 256, y * 19 % 256, x * y * 7 % 256))
+            }
+            return ByteArrayOutputStream().use { output ->
+                check(image.compress(format, 100, output))
+                output.toByteArray()
+            }
+        } finally { image.recycle() }
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun resizedJpegPreservesProportionsAndUsesRequestedWebQuality() {
+        val bytes = imageBytes(Bitmap.CompressFormat.JPEG)
+        val high = store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Photo.jpg", "web-photo", 80, 95)
+        val low = store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Photo.jpg", "web-photo", 80, 25)
+        val highFile = java.io.File(store.mediaDirectory, high.getString("filename"))
+        val lowFile = java.io.File(store.mediaDirectory, low.getString("filename"))
+        val image = BitmapFactory.decodeFile(highFile.path)
+        try {
+            assertEquals(80, image.width)
+            assertEquals(40, image.height)
+            assertEquals("web-photo.jpg", highFile.name)
+            assertEquals("web-photo-2.jpg", lowFile.name)
+            assertEquals("image/jpeg", high.getString("mimeType"))
+            assertTrue(lowFile.length() < highFile.length())
+            assertEquals(highFile.length(), high.getLong("size"))
+        } finally { image.recycle() }
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun resizedPngKeepsTransparencyAndSmallerImagesAreNotEnlarged() {
+        val bytes = imageBytes(Bitmap.CompressFormat.PNG)
+        for ((width, expectedWidth) in listOf(40 to 40, 320 to 160)) {
+            val media = store.importMedia(ByteArrayInputStream(bytes), "image/png", "Transparent.png", width = width, quality = 50)
+            val image = BitmapFactory.decodeFile(java.io.File(store.mediaDirectory, media.getString("filename")).path)
+            try {
+                assertEquals(expectedWidth, image.width)
+                assertEquals(expectedWidth / 2, image.height)
+                assertEquals("image/png", media.getString("mimeType"))
+                assertTrue(image.hasAlpha())
+                assertEquals(96, Color.alpha(image.getPixel(0, 0)))
+            } finally { image.recycle() }
+        }
+    }
+
+    @Test
+    @Config(sdk = [26, 28])
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun imageOrientationIsAppliedBeforeChoosingTheRequestedWidth() {
+        val source = java.io.File.createTempFile("orientation-", ".jpg", context.cacheDir)
+        try {
+            source.writeBytes(imageBytes(Bitmap.CompressFormat.JPEG))
+            ExifInterface(source.path).apply {
+                setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString())
+                saveAttributes()
+            }
+            val media = store.importMedia(source.inputStream(), "image/jpeg", "Portrait.jpg", width = 20)
+            val image = BitmapFactory.decodeFile(java.io.File(store.mediaDirectory, media.getString("filename")).path)
+            try {
+                assertEquals(20, image.width)
+                assertEquals(40, image.height)
+            } finally { image.recycle() }
+        } finally { source.delete() }
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun invalidOptimizationAndAnimatedImagesLeaveNoPartialFilesOrRows() {
+        val bytes = imageBytes(Bitmap.CompressFormat.JPEG)
+        for ((width, quality) in listOf(0 to 85, 16385 to 85, 80 to 0, 80 to 101)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Photo.jpg", width = width, quality = quality)
+            }
+        }
+        val animated = Base64.getDecoder().decode("R0lGODlhAgABAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAgABAAAIBQABAAgIACH5BAEKAAEALAAAAAACAAEAgQAA/wAAAAAAAAAAAAgFAAEACAgAOw==")
+        assertThrows(IllegalArgumentException::class.java) {
+            store.importMedia(ByteArrayInputStream(animated), "image/gif", "Animation.gif", width = 1)
+        }
+        assertEquals(0, store.project().getJSONArray("media").length())
+        assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        val original = store.importMedia(ByteArrayInputStream(animated), "image/gif", "Animation.gif")
+        assertArrayEquals(animated, java.io.File(store.mediaDirectory, original.getString("filename")).readBytes())
     }
 
     @Test

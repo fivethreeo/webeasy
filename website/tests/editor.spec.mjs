@@ -129,8 +129,8 @@ test("homepage choice persists, hides its submenu link and reflows at enlarged t
   }
 });
 
-async function openField(page, content = "<p>Hello from the phone</p>") {
-  await page.addInitScript(({ photoSize, videoSize, content, project }) => {
+async function openField(page, content = "<p>Hello from the phone</p>", nativeDetails = null) {
+  await page.addInitScript(({ photoSize, videoSize, content, project, nativeDetails }) => {
     window.WebeasyNative = {
       request(serialized) {
         const { id, method, payload } = JSON.parse(serialized);
@@ -138,13 +138,16 @@ async function openField(page, content = "<p>Hello from the phone</p>") {
         if (method === "change") window.__content = payload.content;
         if (method === "resize") window.__fieldHeight = payload.height;
         if (method === "pickMedia") window.__mediaRequest = payload;
-        const result = method === "pageLinks" ? { pages: project.pages, homePageId: project.pages[0].id } : method === "pickMedia" ? (payload.kind === "image"
+        if (method === "mediaDetails") window.__mediaDetailsRequest = payload;
+        const result = method === "ready" && nativeDetails ? { mediaDetails: true }
+          : method === "mediaDetails" ? nativeDetails.result
+          : method === "pageLinks" ? { pages: project.pages, homePageId: project.pages[0].id } : method === "pickMedia" ? (payload.kind === "image"
           ? { id: "field-image", filename: payload.basename ? `${payload.basename}.png` : "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
           : { id: "field-video", filename: payload.basename ? `${payload.basename}.mp4` : "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize }) : null;
         queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
       },
     };
-  }, { photoSize: photo.length, videoSize: clip.length, content, project });
+  }, { photoSize: photo.length, videoSize: clip.length, content, project, nativeDetails });
   await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
@@ -199,6 +202,50 @@ test("optional basenames are validated before the picker and native filenames ar
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/shore.mp4");
   expect(await page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "video", basename: "shore" });
   await expect.poll(() => page.evaluate(() => window.__content)).toContain('src="media/shore.mp4"');
+});
+
+test("optional image width and quality validate before picking and never carry into videos", async ({ page }) => {
+  await openField(page);
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("Maximum image width (pixels, optional)").fill("0");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  expect(await page.evaluate(() => window.__mediaRequest)).toBeUndefined();
+  await page.getByLabel("Maximum image width (pixels, optional)").fill("1600");
+  await page.getByLabel("JPEG quality (%, optional)").fill("101");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  expect(await page.evaluate(() => window.__mediaRequest)).toBeUndefined();
+  await page.getByLabel("JPEG quality (%, optional)").fill("80");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "", width: 1600, quality: 80 });
+  await page.getByRole("button", { name: "Phone video", exact: true }).click();
+  await expect(page.getByLabel("JPEG quality (%, optional)")).toBeHidden();
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "video", basename: "" });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.getByLabel("Maximum image width (pixels, optional)")).toHaveValue("");
+  await page.getByLabel("JPEG quality (%, optional)").fill("0");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+});
+
+test("native full-screen media details return optional optimization without opening an embedded dialog", async ({ page }) => {
+  await openField(page, "<p>Hello</p>", {
+    result: { basename: "coast", alt: "Coast", caption: "Our coast", imageOptions: { width: 1200, quality: 82 } },
+  });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Content", exact: true }).locator("figure img")).toHaveAttribute("src", "media/coast.png");
+  expect(await page.evaluate(() => window.__mediaDetailsRequest)).toEqual({ kind: "image" });
+  expect(await page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "coast", width: 1200, quality: 82 });
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<figcaption>Our coast</figcaption>");
+});
+
+test("cancelling native full-screen media details leaves content and the picker untouched", async ({ page }) => {
+  await openField(page, "<p>Keep this</p>", { result: null });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Figure cancelled.");
+  expect(await page.evaluate(() => window.__mediaRequest)).toBeUndefined();
+  await expect(page.getByRole("textbox", { name: "Content", exact: true })).toHaveText("Keep this");
 });
 
 test("image and video figures can be removed without deleting surrounding content", async ({ page, isMobile }) => {
