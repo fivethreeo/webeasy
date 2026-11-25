@@ -65,13 +65,18 @@ class MainActivity : ComponentActivity() {
     private var pendingPublish by mutableStateOf(false)
     private var pendingHostKey by mutableStateOf<HostKeyApproval?>(null)
     private val hosting by lazy { HostingCredentials(this) }
-    private var hostingStatus by mutableStateOf("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
+    private var hostingStatus by mutableStateOf("")
+    private var hostingServer by mutableStateOf<String?>(null)
+    private var hostingDirectory by mutableStateOf("")
     private var publicPathPrefix by mutableStateOf("")
     private var uploadSubfolder by mutableStateOf("")
     private var savedPublicPathPrefix by mutableStateOf("")
     private var savedUploadSubfolder by mutableStateOf("")
 
     private fun loadPublishingSettings(connection: JSONObject) {
+        hostingServer = if (connection.has("host"))
+            "${connection.getString("protocol").uppercase(java.util.Locale.ROOT)} ${connection.getString("host")}:${connection.getInt("port")}" else null
+        hostingDirectory = connection.optString("directory")
         publicPathPrefix = connection.optString("publicPathPrefix")
         uploadSubfolder = connection.optString("uploadSubfolder")
         savedPublicPathPrefix = publicPathPrefix
@@ -163,7 +168,7 @@ class MainActivity : ComponentActivity() {
                 runCatching { hosting.save(connection) }.fold(
                     onSuccess = { runOnUiThread {
                         loadPublishingSettings(connection)
-                        hostingStatus = "Saved hosting: ${connection.getString("host")}. Not connected yet."
+                        hostingStatus = "Hosting added successfully."
                     } },
                     onFailure = { runOnUiThread { hostingStatus = "Cannot save hosting securely." } })
             }
@@ -187,7 +192,6 @@ class MainActivity : ComponentActivity() {
             runCatching { hosting.load() }.getOrNull()?.let { connection ->
                 runOnUiThread {
                     loadPublishingSettings(connection)
-                    hostingStatus = "Saved hosting: ${connection.getString("host")}."
                 }
             }
         }
@@ -288,7 +292,21 @@ class MainActivity : ComponentActivity() {
         }
         if (tab == 4) {
             Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(hostingStatus)
+                Card(colors = CardDefaults.cardColors(containerColor = if (hostingServer != null)
+                    MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(if (hostingServer != null) "Hosting configured" else "No hosting added",
+                            style = MaterialTheme.typography.headlineSmall)
+                        hostingServer?.let { server ->
+                            Text(server)
+                            Text("Destination: $hostingDirectory")
+                            Text("Saved securely on this device. The connection is checked when you publish.")
+                        } ?: Text("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
+                        if (hostingStatus.isNotEmpty()) Text(hostingStatus)
+                    }
+                }
+                Text(if (hostingServer == null) "Add hosting" else "Replace hosting", style = MaterialTheme.typography.titleMedium)
                 Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, enabled = !busy) {
                     Text("Read QR from picture")
                 }
@@ -304,21 +322,21 @@ class MainActivity : ComponentActivity() {
                             } },
                             onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
                     }
-                }, enabled = !busy) { Text("Forget hosting") }
+                }, enabled = !busy && hostingServer != null) { Text("Forget hosting") }
                 OutlinedTextField(value = publicPathPrefix, onValueChange = { publicPathPrefix = it },
-                    label = { Text("Public URL prefix (optional)") }, singleLine = true, enabled = !busy,
+                    label = { Text("Public URL prefix (optional)") }, singleLine = true, enabled = !busy && hostingServer != null,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = uploadSubfolder, onValueChange = { uploadSubfolder = it },
-                    label = { Text("Upload subfolder (optional)") }, singleLine = true, enabled = !busy,
+                    label = { Text("Upload subfolder (optional)") }, singleLine = true, enabled = !busy && hostingServer != null,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth())
                 Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
-                Button(onClick = ::savePublishingSettings, enabled = ready && !busy && publishingSettingsChanged()) {
+                Button(onClick = ::savePublishingSettings, enabled = ready && !busy && hostingServer != null && publishingSettingsChanged()) {
                     Text("Save publishing settings")
                 }
                 if (publishingSettingsChanged()) Text("Save publishing settings before publishing.")
-                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy && !publishingSettingsChanged()) { Text("Publish website") }
+                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy && hostingServer != null && !publishingSettingsChanged()) { Text("Publish website") }
                 if (busy) CircularProgressIndicator()
                 Text("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }

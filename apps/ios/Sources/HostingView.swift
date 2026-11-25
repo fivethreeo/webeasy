@@ -37,7 +37,9 @@ private enum QRImageSource: String, Identifiable {
 struct HostingView: View {
     @ObservedObject var model: NativeEditorModel
     @State private var source: QRImageSource?
-    @State private var status = "Import your hosting setup QR. Pictures are decoded on this phone, not uploaded."
+    @State private var status = ""
+    @State private var hostingServer: String?
+    @State private var hostingDirectory = ""
     @State private var confirmingPublish = false
     @State private var publicPathPrefix = ""
     @State private var uploadSubfolder = ""
@@ -49,6 +51,8 @@ struct HostingView: View {
     }
 
     private func loadSettings(_ destination: HostingDestination) {
+        hostingServer = "\(destination.protocol.uppercased()) \(destination.host):\(destination.port)"
+        hostingDirectory = destination.directory
         publicPathPrefix = destination.publicPathPrefix ?? ""
         uploadSubfolder = destination.uploadSubfolder ?? ""
         savedPublicPathPrefix = publicPathPrefix
@@ -58,18 +62,33 @@ struct HostingView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Text(status)
-                Button("Read QR from picture") { source = .picture }.disabled(model.busy)
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take a QR picture") { source = .camera }.disabled(model.busy)
+                Section("Hosting setup") {
+                    if let hostingServer {
+                        Label("Hosting configured", systemImage: "checkmark.circle.fill")
+                            .font(.headline).foregroundStyle(.green)
+                        Text(hostingServer)
+                        Text("Destination: \(hostingDirectory)")
+                        Text("Saved securely on this device. The connection is checked when you publish.")
+                    } else {
+                        Label("No hosting added", systemImage: "server.rack").font(.headline)
+                        Text("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
+                    }
+                    if !status.isEmpty { Text(status) }
                 }
-                Button("Forget hosting", role: .destructive) {
-                    HostingCredentials.remove()
-                    publicPathPrefix = ""; uploadSubfolder = ""
-                    savedPublicPathPrefix = ""; savedUploadSubfolder = ""
-                    status = "Hosting credentials removed."
+                Section(hostingServer == nil ? "Add hosting" : "Replace hosting") {
+                    Button("Read QR from picture") { source = .picture }.disabled(model.busy)
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button("Take a QR picture") { source = .camera }.disabled(model.busy)
+                    }
+                    Button("Forget hosting", role: .destructive) {
+                        HostingCredentials.remove()
+                        hostingServer = nil; hostingDirectory = ""
+                        publicPathPrefix = ""; uploadSubfolder = ""
+                        savedPublicPathPrefix = ""; savedUploadSubfolder = ""
+                        status = "Hosting credentials removed."
+                    }
+                    .disabled(model.busy || hostingServer == nil)
                 }
-                .disabled(model.busy)
                 Section("Publishing paths") {
                     TextField("Public URL prefix (optional)", text: $publicPathPrefix)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -85,9 +104,10 @@ struct HostingView: View {
                             } catch { status = error.localizedDescription }
                         }
                     }.disabled(!settingsChanged || !model.ready || model.busy)
-                }.disabled(model.busy)
+                }.disabled(model.busy || hostingServer == nil)
                 if settingsChanged { Text("Save publishing settings before publishing.") }
-                Button("Publish website") { confirmingPublish = true }.disabled(!model.ready || model.busy || settingsChanged)
+                Button("Publish website") { confirmingPublish = true }
+                    .disabled(!model.ready || model.busy || settingsChanged || hostingServer == nil)
                 if model.busy { ProgressView() }
                 Text(model.status)
                 Text("Credentials and trusted SFTP keys are kept in Keychain. FTPS validates the server certificate; SFTP requires a trusted server key.")
@@ -110,7 +130,6 @@ struct HostingView: View {
                 if let data = HostingCredentials.load(),
                    let destination = try? JSONDecoder().decode(HostingDestination.self, from: data) {
                     if !settingsChanged { loadSettings(destination) }
-                    status = "Saved hosting: \(destination.host)."
                 }
             }
             .sheet(item: $source) { source in
