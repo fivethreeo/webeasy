@@ -1,7 +1,8 @@
 import Foundation
 
 enum PublishingOperation {
-    static func directory(_ action: (@escaping @Sendable (Error?) -> Void) -> Progress?) async throws {
+    static func directory(isolation: isolated (any Actor)? = #isolation,
+                          _ action: (@escaping @Sendable (Error?) -> Void) -> Progress?) async throws {
         var progress: Progress?
         // FilesProvider's MKD operation does not send QUIT; cancellation closes its completed stream.
         defer { progress?.cancel() }
