@@ -22,6 +22,8 @@ struct HostKeyApproval: Error, Identifiable, Sendable {
     var id: String { "\(host):\(port)" }
 }
 
+private struct UntrustedHostKey: Error {}
+
 private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     let pin: String?
     private let lock = NSLock()
@@ -31,12 +33,12 @@ private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unc
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
         let encoded = String(openSSHPublicKey: hostKey).split(separator: " ")
         guard encoded.count >= 2, let data = Data(base64Encoded: String(encoded[1])) else {
-            validationCompletePromise.fail(InvalidHostKey()); return
+            validationCompletePromise.fail(UntrustedHostKey()); return
         }
         let fingerprint = "SHA256:" + Data(SHA256.hash(data: data)).base64EncodedString().replacingOccurrences(of: "=", with: "")
         lock.lock(); observed = fingerprint; lock.unlock()
         if fingerprint == pin { validationCompletePromise.succeed(()) }
-        else { validationCompletePromise.fail(InvalidHostKey()) }
+        else { validationCompletePromise.fail(UntrustedHostKey()) }
     }
 }
 
@@ -47,7 +49,7 @@ enum SitePublisher {
             throw ContentError.invalid("Cannot read the generated website.")
         }
         var files: [(String, URL)] = []
-        for case let file as URL in enumerator {
+        for case let file as URL in enumerator.allObjects {
             if try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                 files.append((String(file.path.dropFirst(root.path.count + 1)), file))
             }

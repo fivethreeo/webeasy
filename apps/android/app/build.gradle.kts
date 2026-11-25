@@ -44,6 +44,26 @@ tasks.named("preBuild") {
     dependsOn(packageWebsite)
 }
 
+val publishingTests = tasks.register<Test>("testPublishingProtocols") {
+    val unitTests = tasks.named<Test>("testDebugUnitTest").get()
+    dependsOn("compileDebugUnitTestKotlin")
+    testClassesDirs = unitTests.testClassesDirs
+    classpath = unitTests.classpath + configurations.getByName("debugUnitTestRuntimeClasspath")
+    include("**/SitePublisherTest.class")
+    mustRunAfter(unitTests)
+}
+
+tasks.withType<Test>().configureEach {
+    if (name == "testDebugUnitTest") {
+        exclude("**/SitePublisherTest.class")
+        doFirst {
+            // The fixture's SFTP filesystem SPI conflicts with Robolectric's native SQLite loader.
+            classpath = classpath.filter { !it.name.startsWith("sshd-") }
+        }
+        finalizedBy(publishingTests)
+    }
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.0")
