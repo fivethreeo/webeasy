@@ -114,6 +114,9 @@ The Android `preBuild` task rebuilds and packages the website automatically.
 The APK is generated in `app/build/outputs/apk/debug/`.
 Previews use AndroidX WebKit's local HTTPS asset loader, not unrestricted file URLs.
 
+Android's hosting QR camera uses a full-resolution photo instead of a thumbnail.
+The temporary capture file is deleted after loading the image or cancelling the camera.
+
 ## Current boundaries
 
 The editor supports pages/subpages, dated news, ordered owned sections/asides,

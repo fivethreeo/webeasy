@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     private var tab by mutableIntStateOf(0)
     private val screens = mutableStateListOf<Screen>()
     private var pendingMedia: PendingMedia? = null
+    private var pendingQRPhoto: File? = null
     private val drafts = ContentDrafts()
     private var pendingBack by mutableStateOf<Screen?>(null)
     private var pendingPublish by mutableStateOf(false)
@@ -150,8 +151,33 @@ class MainActivity : ComponentActivity() {
                 .onSuccess(::readQR).onFailure { hostingStatus = "Cannot read this picture." }
         }
     }
-    private val qrCamera = registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { image ->
-        if (image != null) readQR(InputImage.fromBitmap(image, 0))
+    private val qrCamera = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val photo = pendingQRPhoto
+        pendingQRPhoto = null
+        if (photo != null) {
+            try {
+                if (success) readQR(InputImage.fromFilePath(this,
+                    FileProvider.getUriForFile(this, "$packageName.exports", photo)))
+            } catch (_: Exception) {
+                hostingStatus = "Cannot read this QR picture."
+            } finally {
+                photo.delete()
+            }
+        }
+    }
+
+    private fun photographQR() {
+        runCatching {
+            pendingQRPhoto?.delete()
+            val directory = File(cacheDir, "exports").apply { mkdirs() }
+            val photo = File.createTempFile("hosting-qr-", ".jpg", directory)
+            pendingQRPhoto = photo
+            qrCamera.launch(FileProvider.getUriForFile(this, "$packageName.exports", photo))
+        }.onFailure {
+            pendingQRPhoto?.delete()
+            pendingQRPhoto = null
+            hostingStatus = "Camera is unavailable."
+        }
     }
 
     private fun readQR(image: InputImage) {
@@ -184,6 +210,9 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        savedInstanceState?.getString("hostingQRPhoto")?.takeIf {
+            it.startsWith("hosting-qr-") && it.endsWith(".jpg") && File(it).name == it
+        }?.let { pendingQRPhoto = File(File(cacheDir, "exports"), it) }
         generator = localWebView().apply {
             webViewClient = client(loader(), onFinished = { ready = true })
             loadUrl("$base/assets/website/generator.html")
@@ -265,6 +294,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingQRPhoto?.let { outState.putString("hostingQRPhoto", it.name) }
+        super.onSaveInstanceState(outState)
+    }
+
     private fun changed() {
         project?.let { content ->
             val home = content.optString("homePageId")
@@ -319,7 +353,7 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, enabled = !busy) {
                     Text("Read QR from picture")
                 }
-                Button(onClick = { runCatching { qrCamera.launch(null) }.onFailure { hostingStatus = "Camera is unavailable." } }, enabled = !busy) {
+                Button(onClick = ::photographQR, enabled = !busy) {
                     Text("Take a QR picture")
                 }
                 TextButton(onClick = {
