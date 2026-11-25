@@ -79,7 +79,10 @@ struct NativeRichField: UIViewRepresentable {
                 var presenter = rootController
                 while let presented = presenter.presentedViewController { presenter = presented }
                 let controller = UIHostingController(rootView: MediaDetailsView(kind: kind) { [weak self] details in
-                    presenter.dismiss(animated: true) { self?.send(id, details ?? NSNull()) }
+                    let response = Self.response(id, details ?? NSNull())
+                    presenter.dismiss(animated: true) {
+                        self?.view?.evaluateJavaScript("window.WebeasyBridge.receive(\(response));")
+                    }
                 })
                 controller.modalPresentationStyle = .fullScreen
                 presenter.present(controller, animated: true)
