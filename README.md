@@ -128,6 +128,18 @@ integration. Keep the live SQLite database local and create
 consistent snapshots for backup. Configure Dropbox separately from QR-provisioned
 SFTP/FTPS hosting credentials. Credentials must never go in the website bundle.
 
+The native **Changes** tab has separate **Unsaved** and **Unpublished** views,
+with before/after values for changed content, additions, removals, ordering, and
+homepage selection. Unsaved compares against the last local save. Unpublished
+compares against the last successful publish recorded on this device; saving,
+exporting, or a failed upload does not advance that baseline. The published
+snapshot survives app restarts. Older installations start tracking after their
+first successful publish from a version that supports snapshots. These are local
+content comparisons, not a check of server files or hosting settings.
+
+**Templates** opens selectable template source code, with a **Preview** action.
+Building blocks remain available to the renderer but are not a native menu tab.
+
 ## Content and phone media
 
 `website/src/content.json` is the example/first-install seed. Pages have `title`,

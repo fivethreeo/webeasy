@@ -71,6 +71,20 @@ final class ContentStore: @unchecked Sendable {
 
     deinit { sqlite3_close(database) }
 
+    func publishedSnapshot() throws -> Data? {
+        try queue.sync {
+            try (rows("SELECT value FROM metadata WHERE key = 'published_project'").first?["value"] as? String)?
+                .data(using: .utf8)
+        }
+    }
+
+    func savePublishedSnapshot(_ data: Data) throws {
+        try queue.sync {
+            try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('published_project', ?)",
+                        [String(decoding: data, as: UTF8.self)])
+        }
+    }
+
     private func databaseError() -> ContentError {
         .invalid(database.map { String(cString: sqlite3_errmsg($0)) } ?? "SQLite storage is unavailable.")
     }

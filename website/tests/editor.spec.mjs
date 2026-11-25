@@ -29,6 +29,21 @@ async function openEditor(page) {
   await expect(page.getByRole("status")).toHaveText("Ready.");
 }
 
+test("native generator reports changes even when the current draft is incomplete", async ({ page }) => {
+  await page.goto("/generator.html");
+  await page.waitForFunction(() => typeof window.WebeasyGenerator?.changes === "function");
+  const result = await page.evaluate((before) => {
+    const after = structuredClone(before);
+    after.news[0].title = "";
+    return JSON.parse(window.WebeasyGenerator.changes(JSON.stringify({ before, after })));
+  }, project);
+  expect(result.changes).toHaveLength(1);
+  expect(result.changes[0]).toMatchObject({
+    id: project.news[0].id, status: "Changed",
+    fields: [{ name: "Title", before: project.news[0].title, after: "" }],
+  });
+});
+
 test("edits after repeated saves, nested content, and subpages remain in the saved project", async ({ page }) => {
   await openEditor(page);
   const title = page.getByLabel("Title", { exact: true });

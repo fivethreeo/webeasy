@@ -2,6 +2,7 @@ import { createRichTextSanitizer } from "./rich-text.js";
 import { normalizeProject, renderSite, referencedMedia } from "./content-model.js";
 import { readConnectionQR } from "./connection.mjs";
 import { normalizePublishingSettings } from "./publishing-settings.js";
+import { projectChanges } from "./content-changes.js";
 
 const sanitize = createRichTextSanitizer(window);
 function result(action) {
@@ -9,6 +10,12 @@ function result(action) {
   catch (error) { return JSON.stringify({ error: error.message }); }
 }
 window.WebeasyGenerator = {
+  changes(serialized) {
+    return result(() => {
+      const input = JSON.parse(serialized);
+      return { changes: projectChanges(input.before, input.after) };
+    });
+  },
   readConnection(serialized) {
     return result(() => ({ connection: readConnectionQR(serialized) }));
   },

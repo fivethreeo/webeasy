@@ -67,6 +67,8 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     private var revision = 0
     private var savedNodes: [String: Data] = [:]
     private var savedHomePageID: String?
+    private var savedProject: Data?
+    private var publishedProject: Data?
 
     override init() {
         let storageError: String?
@@ -82,6 +84,8 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         do {
             guard let store else { throw ContentError.invalid(storageError ?? "Cannot open local SQLite storage.") }
             let project = try store.project()
+            savedProject = try JSONSerialization.data(withJSONObject: project)
+            publishedProject = try store.publishedSnapshot()
             pages = (project["pages"] as? [[String: Any]] ?? []).map { ContentNode($0) }
             news = (project["news"] as? [[String: Any]] ?? []).map { ContentNode($0) }
             homePageID = project["homePageId"] as? String ?? pages.first?.id
@@ -233,6 +237,23 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         return output
     }
 
+    func changes(published: Bool) async throws -> [ProjectChange]? {
+        guard ready, !busy else { throw ContentError.invalid("Wait for the current operation to finish.") }
+        guard let baseline = published ? publishedProject : savedProject else { return nil }
+        let input: [String: Any] = ["before": try JSONSerialization.jsonObject(with: baseline), "after": project]
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
+        let argument = try JSONSerialization.data(withJSONObject: serialized, options: .fragmentsAllowed)
+        let result = try await generator.evaluateJavaScript(
+            "window.WebeasyGenerator.changes(\(String(decoding: argument, as: UTF8.self)))")
+        guard let serialized = result as? String, let data = serialized.data(using: .utf8),
+              let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ContentError.invalid("Cannot compare content.")
+        }
+        if let error = output["error"] as? String { throw ContentError.invalid(error) }
+        return try JSONDecoder().decode([ProjectChange].self,
+            from: JSONSerialization.data(withJSONObject: output["changes"]!))
+    }
+
     func save(afterSaved: (() -> Void)? = nil) {
         guard !busy, ready, let store else { return }
         busy = true
@@ -250,6 +271,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                 }.value
                 savedNodes = nodes
                 savedHomePageID = savedHome
+                savedProject = data
                 status = savedRevision == revision ? "Saved locally to SQLite." : "More recent changes remain unsaved."
                 if savedRevision == revision { afterSaved?() }
             } catch { status = error.localizedDescription }
@@ -269,8 +291,8 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                 let savedHome = homePageID
                 let output = try await generate(true, publicPathPrefix: destination?.publicPathPrefix)
                 let data = try JSONSerialization.data(withJSONObject: output)
+                let projectData = try JSONSerialization.data(withJSONObject: output["project"]!)
                 if export || publish {
-                    let projectData = try JSONSerialization.data(withJSONObject: output["project"]!)
                     try await Task.detached {
                         guard let project = try JSONSerialization.jsonObject(with: projectData) as? [String: Any] else {
                             throw ContentError.invalid("Invalid project.")
@@ -279,6 +301,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                     }.value
                     savedNodes = nodes
                     savedHomePageID = savedHome
+                    savedProject = projectData
                 }
                 let directory = try await Task.detached {
                     guard let output = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -290,6 +313,13 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                     defer { try? FileManager.default.removeItem(at: directory) }
                     status = "Publishing website..."
                     try await SitePublisher.publish(destination, root: directory)
+                    do {
+                        try await Task.detached { try store.savePublishedSnapshot(projectData) }.value
+                        publishedProject = projectData
+                    } catch {
+                        status = "Website published, but its change snapshot could not be saved."
+                        return
+                    }
                     status = savedRevision == revision ? "Website published." : "Published snapshot excludes newer edits."
                 } else if export {
                     preview = NativePreview(root: directory, path: "", temporary: true)
@@ -338,7 +368,7 @@ struct EditorView: View {
             contentList(news: false).tabItem { Label("Pages", systemImage: "doc") }
             contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
             examples(model.catalog?.templates ?? [], title: "Templates").tabItem { Label("Templates", systemImage: "rectangle") }
-            examples(model.catalog?.components ?? [], title: "Building blocks").tabItem { Label("Building blocks", systemImage: "square.grid.2x2") }
+            ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
             HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
         }
         .sheet(item: $model.preview) { item in
@@ -391,7 +421,7 @@ struct EditorView: View {
 
     private func examples(_ entries: [CatalogEntry], title: String) -> some View {
         NavigationStack {
-            List(entries) { entry in NavigationLink(entry.title) { WebsitePreview(path: entry.preview) } }
+            List(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry) } }
                 .navigationTitle(title)
         }
     }

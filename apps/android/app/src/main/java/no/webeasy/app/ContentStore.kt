@@ -115,6 +115,15 @@ class ContentStore(private val context: Context) :
         }
     }
 
+    fun publishedSnapshot(): String? =
+        rows(readableDatabase, "SELECT value FROM metadata WHERE key = 'published_project'")
+            .optJSONObject(0)?.getString("value")
+
+    fun savePublishedSnapshot(project: JSONObject) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('published_project', ?)",
+            arrayOf(project.toString()))
+    }
+
     private fun insert(db: SQLiteDatabase, table: String, values: Map<String, Any?>) {
         val fields = ContentValues()
         values.forEach { (key, value) ->

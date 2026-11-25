@@ -54,6 +54,22 @@ class ContentStoreTest {
     }
 
     @Test
+    fun publishedSnapshotSurvivesReopeningAndLocalSavesDoNotAdvanceIt() {
+        assertNull(store.publishedSnapshot())
+        val published = store.project()
+        store.savePublishedSnapshot(published)
+        val draft = JSONObject(published.toString())
+        draft.getJSONArray("pages").getJSONObject(0).put("title", "Unpublished edit")
+        store.save(draft)
+        store.close()
+        store = ContentStore(context)
+        assertEquals(published.toString(), store.publishedSnapshot())
+        assertEquals("Unpublished edit", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+        store.savePublishedSnapshot(draft)
+        assertEquals(draft.toString(), store.publishedSnapshot())
+    }
+
+    @Test
     fun failedSaveRollsBackInsteadOfLosingExistingContent() {
         val original = store.project()
         val changed = JSONObject(original.toString())

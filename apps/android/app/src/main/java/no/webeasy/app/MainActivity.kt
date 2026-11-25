@@ -26,6 +26,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
@@ -45,6 +47,8 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
@@ -72,6 +76,8 @@ class MainActivity : ComponentActivity() {
     private var uploadSubfolder by mutableStateOf("")
     private var savedPublicPathPrefix by mutableStateOf("")
     private var savedUploadSubfolder by mutableStateOf("")
+    private var savedContent by mutableStateOf<String?>(null)
+    private var publishedContent by mutableStateOf<String?>(null)
 
     private fun loadPublishingSettings(connection: JSONObject) {
         hostingServer = if (connection.has("host"))
@@ -184,9 +190,11 @@ class MainActivity : ComponentActivity() {
         }
         worker.execute {
             runCatching {
-                store.project() to JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
-            }.fold(onSuccess = { (content, examples) -> runOnUiThread {
+                Triple(store.project(), JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() }),
+                    store.publishedSnapshot())
+            }.fold(onSuccess = { (content, examples, published) -> runOnUiThread {
                 drafts.markSaved(drafts.capture(content))
+                savedContent = content.toString(); publishedContent = published
                 project = content; catalog = examples; status = "Local SQLite. Save changes before closing."
             } }, onFailure = { runOnUiThread { status = it.message ?: "Cannot open local storage." } })
             runCatching { hosting.load() }.getOrNull()?.let { connection ->
@@ -247,6 +255,7 @@ class MainActivity : ComponentActivity() {
                             screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
                                 RichField(screen.record, screen.contentKey)
                             }
+                            screen?.kind == "template" -> TemplateSource(screen.record!!)
                             screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
                             else -> RootList(revision)
                         }
@@ -286,7 +295,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
         ScrollableTabRow(selectedTabIndex = tab) {
-            listOf("Pages", "News", "Templates", "Building blocks", "Hosting").forEachIndexed { index, name ->
+            listOf("Pages", "News", "Templates", "Changes", "Hosting").forEachIndexed { index, name ->
                 Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
             }
         }
@@ -342,8 +351,12 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
+        if (tab == 3) {
+            Changes()
+            return
+        }
         val source = if (tab < 2) project else catalog
-        val key = listOf("pages", "news", "templates", "components")[tab]
+        val key = listOf("pages", "news", "templates")[tab]
         val records = source?.optJSONArray(key)?.records() ?: emptyList()
         LazyColumn {
             if (tab == 1) item { TextButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
@@ -352,7 +365,7 @@ class MainActivity : ComponentActivity() {
                 if (tab < 2) RowEntry(record, source!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
                 else ListItem(headlineContent = { Text(record.getString("title")) },
                     supportingContent = { Text(record.getString("description")) },
-                    modifier = Modifier.clickable { screens.add(Screen("preview", url = "$base/assets/website/${record.getString("preview")}")) })
+                    modifier = Modifier.clickable { screens.add(Screen("template", record)) })
             }
             if (tab < 2 && source != null) item {
                 TextButton(onClick = {
@@ -360,6 +373,93 @@ class MainActivity : ComponentActivity() {
                     val collection = source.getJSONArray(key)
                     val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
                 }) { Text(if (tab == 0) "Add page" else "Add news") }
+            }
+        }
+    }
+
+    @Composable
+    private fun TemplateSource(record: JSONObject) {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            TextButton(onClick = {
+                screens.add(Screen("preview", url = "$base/assets/website/${record.getString("preview")}"))
+            }) { Text("Preview template") }
+            SelectionContainer(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Text(record.getString("source"), fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+
+    private suspend fun contentChanges(published: Boolean): JSONArray? {
+        val baseline = (if (published) publishedContent else savedContent) ?: return null
+        val input = JSONObject().put("before", JSONObject(baseline)).put("after", project)
+        return suspendCancellableCoroutine { continuation ->
+            generator.evaluateJavascript("window.WebeasyGenerator.changes(${JSONObject.quote(input.toString())})") { serialized ->
+                if (continuation.isActive) continuation.resumeWith(runCatching {
+                    val output = JSONObject(JSONTokener(serialized).nextValue() as String)
+                    check(!output.has("error")) { output.getString("error") }
+                    output.getJSONArray("changes")
+                })
+            }
+        }
+    }
+
+    @Composable
+    private fun Changes() {
+        var published by remember { mutableStateOf(false) }
+        var changes by remember { mutableStateOf(JSONArray()) }
+        var message by remember { mutableStateOf("") }
+        var loading by remember { mutableStateOf(false) }
+        LaunchedEffect(published, revision, savedContent, publishedContent, ready, busy) {
+            changes = JSONArray()
+            loading = false
+            message = ""
+            if (!ready || busy) {
+                message = "Wait for the current operation to finish."
+                return@LaunchedEffect
+            }
+            loading = true
+            try {
+                val result = contentChanges(published)
+                changes = result ?: JSONArray()
+                message = if (result == null)
+                    "No published snapshot recorded yet. Publish successfully from this version to start tracking unpublished changes."
+                else if (result.length() == 0)
+                    if (published) "No unpublished content changes." else "No unsaved content changes."
+                else ""
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                message = error.message ?: "Cannot compare content."
+            }
+            loading = false
+        }
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item {
+                Text("Show changes", style = MaterialTheme.typography.headlineSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = !published, onClick = { published = false }, label = { Text("Unsaved") })
+                    FilterChip(selected = published, onClick = { published = true }, label = { Text("Unpublished") })
+                }
+                Text(if (published)
+                    "Current content compared with the last successful publish recorded on this device. This does not inspect the server."
+                else "Current content compared with the last local save.")
+                Text("Content changes only; hosting settings are not included.")
+                if (loading) CircularProgressIndicator()
+                if (message.isNotEmpty()) Text(message)
+            }
+            items(changes.length(), key = { changes.getJSONObject(it).getString("id") }) { index ->
+                val change = changes.getJSONObject(index)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(change.getString("title"), style = MaterialTheme.typography.titleLarge)
+                    Text(change.getString("status"), style = MaterialTheme.typography.titleMedium)
+                    change.getJSONArray("fields").records().forEach { field ->
+                        Text(field.getString("name"), style = MaterialTheme.typography.titleMedium)
+                        Text("Before")
+                        SelectionContainer { Text(field.getString("before").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                        Text("After")
+                        SelectionContainer { Text(field.getString("after").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
+                    }
+                    HorizontalDivider()
+                }
             }
         }
     }
@@ -495,11 +595,19 @@ class MainActivity : ComponentActivity() {
                 runCatching {
                     if (!compile || export || publish) {
                         store.save(result.getJSONObject("project"))
-                        runOnUiThread { drafts.markSaved(savedSnapshot) }
+                        runOnUiThread {
+                            drafts.markSaved(savedSnapshot)
+                            savedContent = result.getJSONObject("project").toString()
+                        }
                     }
                     if (!compile) null else if (publish) {
                         val directory = store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
-                        try { SitePublisher.publish(destination!!, directory) }
+                        try {
+                            SitePublisher.publish(destination!!, directory)
+                            try { store.savePublishedSnapshot(result.getJSONObject("project")) }
+                            catch (error: Exception) { throw IllegalStateException("Website published, but its change snapshot could not be saved.", error) }
+                            runOnUiThread { publishedContent = result.getJSONObject("project").toString() }
+                        }
                         finally { directory.deleteRecursively() }
                         null
                     } else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
