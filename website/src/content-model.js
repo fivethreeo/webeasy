@@ -130,22 +130,25 @@ function body(record, catalog) {
   return withAsides(`${rich(record.content ?? record.shortContent)}${sections}`, record.asides, catalog);
 }
 
-function menu(pages, activeId, currentId) {
-  return pages.map((page) => {
+function menu(pages, activeId, currentId, homeId) {
+  return pages.filter((page) => page.id !== homeId).map((page) => {
     return `<li><a href="${page.slug}/"${page.id === activeId ? ' class="active"' : ""}${page.id === currentId ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a></li>`;
   }).join("\n");
 }
 
-function subpageNavigation(entry) {
+function subpageNavigation(entry, homeId) {
   const top = entry.ancestors[0] ?? entry.record;
   if (!top.children.length) return "";
   const active = new Set([...entry.ancestors.map((page) => page.id), entry.record.id]);
-  const links = (pages, prefix) => `<ul class="stack">${pages.map((page) => {
+  const items = (pages, prefix) => pages.map((page) => {
     const route = `${prefix}${page.slug}/`;
-    return `<li><a href="${route}"${active.has(page.id) ? ' class="active"' : ""}${page.id === entry.record.id ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a>${page.children.length ? links(page.children, route) : ""}</li>`;
-  }).join("\n")}</ul>`;
+    if (page.id === homeId) return items(page.children, route);
+    return `<li><a href="${route}"${active.has(page.id) ? ' class="active"' : ""}${page.id === entry.record.id ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a>${page.children.length ? `<ul class="stack">${items(page.children, route)}</ul>` : ""}</li>`;
+  }).join("\n");
+  const children = items(top.children, `${top.slug}/`);
+  if (!children.trim()) return "";
   return `<aside class="stack box content-asides subpage-navigation"><nav class="stack" aria-label="Subpages">
-    <h2>Subpages</h2>${links(top.children, `${top.slug}/`)}</nav></aside>`;
+    <h2>Subpages</h2><ul class="stack">${children}</ul></nav></aside>`;
 }
 
 export function renderSite(project, catalog) {
@@ -163,9 +166,11 @@ export function renderSite(project, catalog) {
   };
   const files = [];
   const pages = pageRoutes(project.pages);
+  const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
+  const home = homeEntry?.record;
   const pageContent = (entry) => {
     const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog));
-    const aside = subpageNavigation(entry);
+    const aside = subpageNavigation(entry, home?.id);
     return aside ? `<div class="with-sidebar with-sidebar:right"><div class="stack content-main">${article}</div>${aside}</div>` : article;
   };
   const document = (title, content, file, currentId = null) => {
@@ -174,8 +179,10 @@ export function renderSite(project, catalog) {
     const activeId = current?.ancestors[0]?.id ?? currentId;
     const newsIndex = file === "news/index.html" || (file === "index.html" && !pages.length);
     const newsActive = newsIndex || file.startsWith("news/");
-    const navigation = `<nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId)}
-    <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav>`;
+    const navigation = `<header class="cluster site-header">
+    <a class="site-logo" href="/" aria-label="Home"${currentId === home?.id && home ? ' aria-current="page"' : ""}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
+    <nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId, home?.id)}
+    <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav></header>`;
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -204,8 +211,6 @@ export function renderSite(project, catalog) {
     <time datetime="${item.date}">${item.date}</time></header>${rich(item.shortContent)}</article>`).join("\n");
   const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
   files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
-  const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
-  const home = homeEntry?.record;
   const homepage = homeEntry ? pageContent(homeEntry) : listing;
   files.push({ path: "index.html", html: document(home?.title ?? "News", homepage, "index.html", home?.id) });
   return files;

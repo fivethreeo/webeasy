@@ -70,6 +70,9 @@ struct NativeRichField: UIViewRepresentable {
                 if let content = payload["content"] as? String { value = content; parent.content = content }
                 send(id)
             case "resize": send(id)
+            case "pageLinks":
+                send(id, ["pages": parent.model.pages.map(\.json),
+                          "homePageId": parent.model.homePageID.map { $0 as Any } ?? NSNull()])
             case "pickMedia":
                 guard pending == nil, let kind = payload["kind"] as? String, ["image", "video"].contains(kind),
                       let rootController = view?.window?.rootViewController else { send(id, NSNull(), "Cannot open media picker."); return }

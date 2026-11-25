@@ -13,6 +13,7 @@ window.WebeasyField = {
     const record = { id: "field", content: html };
     document.getElementById("field").replaceChildren(richEditor(record, "content", "Content", {
       project: { media: [] },
+      getLinkProject: () => native ? request("pageLinks") : request("load").then((result) => result.project),
       onChange(html) { value = html; send("change", { content: html }); },
     }));
   },

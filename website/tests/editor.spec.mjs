@@ -97,7 +97,7 @@ test("latest news renders three articles and editor/aside layouts reflow at enla
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
-test("homepage choice persists and submenu aside reflows with active links at enlarged text", async ({ page }) => {
+test("homepage choice persists, hides its submenu link and reflows at enlarged text", async ({ page }) => {
   await openEditor(page);
   if (!await page.locator("#content-navigation").evaluate((details) => details.open)) await page.getByText("Choose content", { exact: true }).click();
   await page.locator("#pages button").filter({ hasText: "Team" }).click();
@@ -106,8 +106,7 @@ test("homepage choice persists and submenu aside reflows with active links at en
   await expect.poll(() => page.evaluate(() => window.__savedProject.homePageId)).toBe(project.pages[0].children[0].id);
   await page.getByRole("button", { name: "Preview", exact: true }).click();
   const aside = page.locator("#preview aside.subpage-navigation");
-  await expect(aside).toBeVisible();
-  await expect(aside.getByRole("link", { name: "Team", exact: true })).toHaveClass("active");
+  await expect(aside).toHaveCount(0);
   await expect(page.locator("#preview .site-menu a.active")).toHaveAttribute("href", "about/");
   for (const size of ["125%", "250%"]) {
     await page.locator("html").evaluate((element, size) => { element.style.fontSize = size; }, size);
@@ -116,20 +115,20 @@ test("homepage choice persists and submenu aside reflows with active links at en
 });
 
 async function openField(page, content = "<p>Hello from the phone</p>") {
-  await page.addInitScript(({ photoSize, videoSize, content }) => {
+  await page.addInitScript(({ photoSize, videoSize, content, project }) => {
     window.WebeasyNative = {
       request(serialized) {
         const { id, method, payload } = JSON.parse(serialized);
         if (method === "ready") window.WebeasyField.setValue(content);
         if (method === "change") window.__content = payload.content;
         if (method === "resize") window.__fieldHeight = payload.height;
-        const result = method === "pickMedia" ? (payload.kind === "image"
+        const result = method === "pageLinks" ? { pages: project.pages, homePageId: project.pages[0].id } : method === "pickMedia" ? (payload.kind === "image"
           ? { id: "field-image", filename: "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
           : { id: "field-video", filename: "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize }) : null;
         queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
       },
     };
-  }, { photoSize: photo.length, videoSize: clip.length, content });
+  }, { photoSize: photo.length, videoSize: clip.length, content, project });
   await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
@@ -162,6 +161,81 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
   await page.getByRole("button", { name: "Phone video", exact: true }).click();
   await page.getByRole("button", { name: "Insert figure", exact: true }).click();
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
+});
+
+test("page links save and navigate in previews, and the logo returns home without a home menu item", async ({ page }) => {
+  await openEditor(page);
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.fill("Visit our team");
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).first().click();
+  await page.getByLabel("Page or subpage").selectOption("about/team/");
+  await page.getByRole("button", { name: "Insert link", exact: true }).click();
+  await expect(field.locator("a")).toHaveAttribute("href", "about/team/");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].content)).toContain('href="about/team/"');
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.locator('#preview .site-menu a[href="about/"]')).toHaveCount(0);
+  const logo = page.locator("#preview .site-logo");
+  await expect(logo).toHaveAttribute("href", "/");
+  await expect.poll(() => logo.locator("img").evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+  const headerBox = await page.locator("#preview .site-header").boundingBox();
+  const logoBox = await logo.boundingBox();
+  const menuBox = await page.locator("#preview .site-menu").boundingBox();
+  expect(Math.abs(logoBox.x - headerBox.x)).toBeLessThan(1);
+  expect(Math.abs(menuBox.x + menuBox.width - headerBox.x - headerBox.width)).toBeLessThan(1);
+  await page.locator("#preview .rich-content").getByRole("link", { name: "Visit our team", exact: true }).click();
+  await expect(page.locator("#preview h1")).toHaveText(project.pages[0].children[0].title);
+  await logo.click();
+  await expect(page.locator("#preview h1")).toHaveText(project.pages[0].title);
+  await page.locator("html").evaluate((element) => { element.style.fontSize = "250%"; });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("native fields choose home/subpage links, edit and remove links, reject unsafe URLs and cancel unchanged", async ({ page }) => {
+  await openField(page);
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.fill("Selected text");
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect(page.getByLabel("Page or subpage").locator('option[value="about/team/"]')).toHaveText("About / Team");
+  await page.getByLabel("Page or subpage").selectOption("index.html");
+  await page.getByRole("button", { name: "Insert link", exact: true }).click();
+  await expect(field.locator("a")).toHaveAttribute("href", "index.html");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="index.html"');
+  const selectLink = () => field.locator("a").evaluate((anchor) => {
+    anchor.closest(".rich-editor").focus();
+    getSelection().setBaseAndExtent(anchor.firstChild, 1, anchor.firstChild, 1);
+  });
+  await selectLink();
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await page.getByLabel("Link URL").fill("javascript:alert(1)");
+  await page.getByRole("button", { name: "Save link", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByLabel("Link URL").fill("https://example.com/info");
+  await page.getByRole("button", { name: "Save link", exact: true }).click();
+  await expect(field.locator("a")).toHaveAttribute("href", "https://example.com/info");
+  await expect(field.locator("a")).toHaveText("Selected text");
+  await selectLink();
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await page.getByLabel("Link URL").fill("https://example.com/cancelled");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(field.locator("a")).toHaveAttribute("href", "https://example.com/info");
+  await selectLink();
+  await page.getByRole("button", { name: "Remove link", exact: true }).click();
+  await expect(field.locator("a")).toHaveCount(0);
+  await expect(field).toHaveText("Selected text");
+  await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<a");
 });
 
 test("inline marks toggle on the selected word and emphasis works at the caret", async ({ page }) => {

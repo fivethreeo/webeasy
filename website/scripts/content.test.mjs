@@ -43,6 +43,23 @@ test("media URLs cannot reference external, temporary device, encoded, or parent
   }
 });
 
+test("links retain safe destinations and text but cannot execute scripts or open device files", () => {
+  for (const href of ["https://example.com/path?q=1", "http://example.com/", "mailto:hello@example.com",
+    "tel:+4712345678", "/", "index.html", "about/team/", "#section"]) {
+    const link = dom(sanitizeRichText(`<p><a href="${href}" title="More" onclick="alert(1)" target="_blank">Read <strong>more</strong></a></p>`)).querySelector("a");
+    assert.equal(link.getAttribute("href"), href);
+    assert.equal(link.textContent, "Read more");
+    assert.equal(link.getAttribute("title"), "More");
+    assert.equal(link.hasAttribute("onclick"), false);
+    assert.equal(link.hasAttribute("target"), false);
+  }
+  for (const href of ["javascript:alert(1)", "java&#10;script:alert(1)", "data:text/html,hello",
+    "file:///private/secret", "content://photos/1", "//example.com/", "\\\\example.com",
+    "../private", "about/%2e%2e/private"]) {
+    assert.equal(dom(sanitizeRichText(`<a href="${href}">Keep text</a>`)).querySelector("a").hasAttribute("href"), false, href);
+  }
+});
+
 test("deep subpages, owned sections/asides, and every dated news route are generated", async () => {
   const project = await loadProject(source);
   const child = structuredClone(project.pages[0].children[0]);
@@ -135,6 +152,23 @@ test("homepage selection supports subpages, preserves their routes and validates
   assert.equal(normalize({ version: 1, pages: [], news: [], media: [] }).homePageId, null);
 });
 
+test("homepage is hidden from menus but retains its named route and home-linked logo", () => {
+  const project = normalize(input);
+  const files = renderSite(project, catalog);
+  for (const file of files) {
+    const document = dom(file.html);
+    assert.equal(document.querySelector('.site-menu a[href="about/"]'), null);
+    assert.equal(document.querySelector(".site-header > .site-logo").getAttribute("href"), "/");
+    assert.equal(document.querySelector(".site-logo img").getAttribute("src"), "assets/logo.svg");
+  }
+  assert.ok(files.some((file) => file.path === "about/index.html"));
+  assert.equal(dom(files.find((file) => file.path === "index.html").html).querySelector(".site-logo").getAttribute("aria-current"), "page");
+  project.homePageId = project.pages[0].children[0].id;
+  for (const file of renderSite(project, catalog)) {
+    assert.equal(dom(file.html).querySelector('.subpage-navigation a[href="about/team/"]'), null);
+  }
+});
+
 test("main menu lists top-level pages and marks their active ancestor on nested routes and homepage", () => {
   const project = normalize(input);
   const root = project.pages[0];
@@ -173,10 +207,10 @@ test("subpage navigation is an aside shared by its parent and descendants, not b
     const page = dom(files.find((file) => file.path === path).html);
     const nav = page.querySelector('aside nav[aria-label="Subpages"]');
     assert.ok(nav, path);
-    assert.deepEqual([...nav.querySelectorAll("a")].map((link) => link.getAttribute("href")), ["about/team/", "about/team/deep/"]);
+    assert.deepEqual([...nav.querySelectorAll("a")].map((link) => link.getAttribute("href")), ["about/team/deep/"]);
     const current = nav.querySelector('[aria-current="page"]');
     assert.equal(current?.getAttribute("href") ?? null,
-      path === "about/index.html" ? null : path.includes("/deep/") ? "about/team/deep/" : "about/team/");
+      path.includes("/deep/") ? "about/team/deep/" : null);
     if (current) assert.ok(current.classList.contains("active"));
   }
   for (const path of ["standalone/index.html", "news/index.html"]) {

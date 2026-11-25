@@ -1,5 +1,5 @@
 import "./editor.css";
-import { createRichTextSanitizer } from "./rich-text.js";
+import { createRichTextSanitizer, safeLinkHref } from "./rich-text.js";
 import { newId, normalizeProject, pageRoutes, sortedNews, renderSite, referencedMedia } from "./content-model.js";
 
 const sanitize = createRichTextSanitizer(window);
@@ -92,6 +92,67 @@ function figureDetails(kind) {
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "insert"
       ? { alt: $("media-alt").value, caption: $("media-caption").value } : null), { once: true });
+    dialog.showModal();
+  });
+}
+function linkDetails(project, selectedText, current) {
+  const dialog = document.createElement("dialog");
+  const form = element("form", "stack");
+  form.method = "dialog";
+  form.append(element("h2", "", current ? "Edit link" : "Insert link"));
+  const pageLabel = element("label", "stack", "Page or subpage");
+  const pages = document.createElement("select");
+  const custom = element("option", "", "Enter a URL");
+  custom.value = "";
+  pages.append(custom);
+  for (const entry of pageRoutes(project.pages ?? [])) {
+    const option = element("option", "", [...entry.ancestors, entry.record].map((page) => page.menuTitle || page.title).join(" / "));
+    option.value = entry.record.id === (project.homePageId ?? project.pages[0]?.id) ? "index.html" : entry.route.slice(1);
+    pages.append(option);
+  }
+  pageLabel.append(pages);
+  const urlLabel = element("label", "stack", "Link URL");
+  const url = document.createElement("input");
+  url.type = "text";
+  url.inputMode = "url";
+  url.required = true;
+  url.value = current?.getAttribute("href") ?? "";
+  url.placeholder = "https://example.com";
+  urlLabel.append(url);
+  const textLabel = element("label", "stack", "Link text");
+  const text = document.createElement("input");
+  text.type = "text";
+  text.value = current?.textContent ?? selectedText;
+  textLabel.append(text);
+  if (url.value && [...pages.options].some((option) => option.value === url.value)) pages.value = url.value;
+  const validate = () => url.setCustomValidity(url.value && !safeLinkHref(url.value.trim())
+    ? "Use a web, email, telephone, or local page URL." : "");
+  pages.addEventListener("change", () => {
+    if (pages.value) {
+      url.value = pages.value;
+      if (!text.value) text.value = pages.selectedOptions[0].textContent;
+    }
+    validate();
+  });
+  url.addEventListener("input", () => { pages.value = ""; validate(); });
+  const actions = element("div", "cluster");
+  const insert = element("button", "", current ? "Save link" : "Insert link");
+  insert.type = "submit";
+  insert.value = "insert";
+  actions.append(insert, button("Cancel", () => dialog.close("cancel")));
+  form.append(pageLabel, urlLabel, textLabel, actions);
+  form.addEventListener("submit", (event) => {
+    validate();
+    if (!form.checkValidity()) { event.preventDefault(); form.reportValidity(); }
+  });
+  dialog.append(form);
+  document.body.append(dialog);
+  validate();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      resolve(dialog.returnValue === "insert" ? { href: url.value.trim(), text: text.value || url.value.trim() } : null);
+      dialog.remove();
+    }, { once: true });
     dialog.showModal();
   });
 }
@@ -214,12 +275,46 @@ export function richEditor(record, key, labelText, options = {}) {
     control.addEventListener("pointerdown", () => rememberSelection(field));
     mediaActions.append(control);
   }
+  const selectedLink = () => {
+    const range = restoreSelection(field);
+    const node = range.commonAncestorContainer;
+    return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
+  };
+  const link = button("Link", async () => {
+    const current = selectedLink();
+    const selectedText = window.getSelection().toString();
+    const linkProject = options.getLinkProject ? await options.getLinkProject() : contentProject;
+    const details = await linkDetails(linkProject, selectedText, current);
+    if (!details) { restoreSelection(field); return; }
+    const range = restoreSelection(field);
+    if (current && field.contains(current)) {
+      current.setAttribute("href", details.href);
+      if (current.textContent !== details.text) current.textContent = details.text;
+    } else if (!range.collapsed && range.toString() === details.text) {
+      document.execCommand("createLink", false, details.href);
+    } else {
+      const anchor = element("a", "", details.text);
+      anchor.setAttribute("href", details.href);
+      document.execCommand("insertHTML", false, anchor.outerHTML);
+    }
+    update(); refreshMarks();
+  });
+  const unlink = button("Remove link", () => {
+    const current = selectedLink();
+    if (current && field.contains(current)) { current.replaceWith(...current.childNodes); update(); }
+    else format("unlink");
+  });
+  for (const control of [link, unlink]) {
+    control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
+    mediaActions.append(control);
+  }
   toolbar.append(mediaActions, marks);
   field.addEventListener("input", () => { if (emphasizeTyping) semanticEmphasis(); update(); refreshMarks(); });
   field.addEventListener("editor-selection", refreshMarks);
   field.addEventListener("keyup", refreshMarks);
   field.addEventListener("pointerup", () => { emphasizeTyping = false; refreshMarks(); });
   field.addEventListener("blur", () => { record[key] = sanitize(field.innerHTML); });
+  field.addEventListener("click", (event) => { if (event.target.closest("a")) event.preventDefault(); });
   field.addEventListener("paste", (event) => {
     event.preventDefault();
     const html = event.clipboardData.getData("text/html");
@@ -310,10 +405,15 @@ function renderEditor() {
     const html = renderSite(normalized, catalog).find((file) => file.path === path)?.html;
     $("preview").innerHTML = new DOMParser().parseFromString(html, "text/html").body.innerHTML;
     // The editor lives at the website root; its preview uses root-relative media/menu paths.
-    $("preview").querySelectorAll("a").forEach((link) => link.addEventListener("click", run(() => {
-      const path = link.getAttribute("href");
+    $("preview").querySelectorAll('a[href]:not([href^="#"])').forEach((link) => link.addEventListener("click", run(() => {
+      const href = link.getAttribute("href");
+      const path = href.split(/[?#]/)[0].replace(/^\//, "").replace(/index\.html$/, "");
+      if (path === "") {
+        selected = normalized.homePageId; renderEditor(); renderLists(); return;
+      }
       const target = pageRoutes(project.pages).find((item) => item.route.slice(1) === path)
         ?? project.news.map((record) => ({ record, route: `news/${record.date}/${record.slug}/` })).find((item) => item.route === path);
+      if (!target && path !== "news/") { window.open(link.href, "_blank", "noopener,noreferrer"); return; }
       selected = target?.record.id; renderEditor(); renderLists();
     })));
     return;

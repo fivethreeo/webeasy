@@ -3,13 +3,26 @@ import createDOMPurify from "dompurify";
 export const richTextTags = [
   "h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "b", "strong", "i", "em",
   "s", "strike", "del", "u", "ul", "ol", "li", "blockquote",
-  "figure", "figcaption", "img", "video", "source",
+  "figure", "figcaption", "img", "video", "source", "a",
 ];
 const attributes = {
+  a: ["href", "title"],
   img: ["src", "alt", "width", "height", "loading"],
   video: ["src", "poster", "controls", "playsinline", "preload", "width", "height"],
   source: ["src", "type"],
 };
+
+export function safeLinkHref(value) {
+  if (!value || /[\u0000-\u0020\u007f\\]/.test(value)) return false;
+  try {
+    const url = new URL(value, "https://local.invalid/");
+    if (/^https?:\/\//i.test(value)) return Boolean(url.hostname);
+    if (/^(mailto|tel):/i.test(value)) return value.split(":").slice(1).join(":").length > 0;
+    if (value.startsWith("//") || value.split(/[?#]/)[0].includes(":")) return false;
+    const path = decodeURIComponent(value.split(/[?#]/)[0]);
+    return !path.split("/").some((part) => part === "." || part === "..");
+  } catch { return false; }
+}
 
 export function localMediaPath(value) {
   return /^(assets|media)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(value) &&
@@ -25,6 +38,7 @@ export function createRichTextSanitizer(window) {
       return;
     }
     if (["src", "poster"].includes(data.attrName) && !localMediaPath(data.attrValue)) data.keepAttr = false;
+    if (data.attrName === "href" && !safeLinkHref(data.attrValue)) data.keepAttr = false;
     if (["width", "height"].includes(data.attrName) && !/^[1-9][0-9]*$/.test(data.attrValue)) data.keepAttr = false;
     if (data.attrName === "preload" && !["none", "metadata", "auto"].includes(data.attrValue)) data.keepAttr = false;
     if (data.attrName === "loading" && !["lazy", "eager"].includes(data.attrValue)) data.keepAttr = false;

@@ -24,6 +24,14 @@ struct HostKeyApproval: Error, Identifiable, Sendable {
 
 private struct UntrustedHostKey: Error {}
 
+private struct PublishingFailure: LocalizedError {
+    let step: String
+    let reason: String
+    var errorDescription: String? {
+        "Publishing failed \(step). \(reason) Existing files are overwritten; some files may already have been uploaded."
+    }
+}
+
 private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     let pin: String?
     private let lock = NSLock()
@@ -64,7 +72,21 @@ enum SitePublisher {
             if destination.protocol == "sftp" { try await sftp(destination, files: files) }
             else { try await ftp(destination, files: files) }
         } catch let approval as HostKeyApproval { throw approval }
-        catch { throw ContentError.invalid("Publishing failed. Check the destination, permissions, certificate or saved server key. Some files may already have been uploaded.") }
+        catch let failure as PublishingFailure { throw ContentError.invalid(failure.localizedDescription) }
+        catch { throw ContentError.invalid("Publishing failed. \(safeReason(error)) Check the destination, permissions, certificate or saved server key. Some files may already have been uploaded.") }
+    }
+
+    private static func safeReason(_ error: Error) -> String {
+        if let ftp = error as? FileProviderFTPError {
+            switch ftp.code {
+            case 421: return "FTP reply 421: the server's connection limit was reached or its service is unavailable."
+            case 530: return "FTP reply 530: login was refused."
+            case 550: return "FTP reply 550: the path is unavailable or writing is not permitted."
+            default: return "FTP server reply \(ftp.code)."
+            }
+        }
+        if let url = error as? URLError { return URLError(url.code).localizedDescription }
+        return "The server or connection refused the operation."
     }
 
     private static func operation(_ action: (@escaping (Error?) -> Void) -> Void) async throws {
@@ -97,21 +119,27 @@ enum SitePublisher {
                 let directory = parts.prefix(count).joined(separator: "/")
                 if directories.insert(directory).inserted {
                     do {
-                        try await operation { done in
+                        try await PublishingOperation.directory { done in
                             provider.create(folder: String(parts[count - 1]), at: parts.prefix(count - 1).joined(separator: "/"), completionHandler: done)
                         }
                     } catch {
-                        let isDirectory = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
-                            provider.attributesOfItem(path: directory) { item, error in
-                                if let error { continuation.resume(throwing: error) }
-                                else { continuation.resume(returning: item?.isDirectory == true) }
+                        do {
+                            let isDirectory = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
+                                provider.attributesOfItem(path: directory) { item, error in
+                                    if let error { continuation.resume(throwing: error) }
+                                    else { continuation.resume(returning: item?.isDirectory == true) }
+                                }
                             }
+                            guard isDirectory else { throw error }
+                        } catch {
+                            throw PublishingFailure(step: "preparing folder \(directory)", reason: safeReason(error))
                         }
-                        guard isDirectory else { throw error }
                     }
                 }
             }
-            try await operation { done in provider.copyItem(localFile: file, to: path, overwrite: true, completionHandler: done) }
+            do {
+                try await operation { done in provider.copyItem(localFile: file, to: path, overwrite: true, completionHandler: done) }
+            } catch { throw PublishingFailure(step: "uploading \(path)", reason: safeReason(error)) }
         }
     }
 

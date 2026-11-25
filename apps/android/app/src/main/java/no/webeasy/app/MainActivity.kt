@@ -472,6 +472,8 @@ class MainActivity : ComponentActivity() {
                     "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id) }
                     "change" -> { value = payload.getString("content"); record.put(key, value); changed(); respond(view, id) }
                     "resize" -> respond(view, id)
+                    "pageLinks" -> respond(view, id, JSONObject().put("pages", project?.getJSONArray("pages") ?: JSONArray())
+                        .put("homePageId", project?.opt("homePageId") ?: JSONObject.NULL))
                     "pickMedia" -> {
                         val kind = payload.optString("kind")
                         if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
@@ -490,7 +492,7 @@ class MainActivity : ComponentActivity() {
     private fun Preview(screen: Screen) {
         AndroidView(modifier = Modifier.fillMaxSize(), factory = {
             localWebView().apply {
-                webViewClient = client(loader(screen.directory))
+                webViewClient = client(loader(screen.directory), preview = screen.directory != null)
                 loadUrl(screen.url!!)
             }
         }, onRelease = { it.destroy() })
@@ -507,15 +509,24 @@ class MainActivity : ComponentActivity() {
         if (preview != null) builder.addPathHandler("/preview/", WebViewAssetLoader.InternalStoragePathHandler(this, preview))
         return builder.build()
     }
-    private fun client(loader: WebViewAssetLoader, onFinished: () -> Unit = {}) = object : WebViewClient() {
+    private fun client(loader: WebViewAssetLoader, preview: Boolean = false, onFinished: () -> Unit = {}) = object : WebViewClient() {
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
             if (!local(request.url)) return denied()
             var url = request.url
+            if (preview && url.path?.startsWith("/preview/") != true) {
+                url = url.buildUpon().path("/preview" + url.path).build()
+            }
             if (url.path?.endsWith("/") == true) url = url.buildUpon().path(url.path + "index.html").build()
             if (url.path?.startsWith("/assets/website/media/") == true) url = url.buildUpon().path(url.path!!.removePrefix("/assets/website")).build()
             return loader.shouldInterceptRequest(url) ?: denied()
         }
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = !local(request.url)
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            if (local(request.url)) return false
+            if (preview && request.hasGesture() && request.url.scheme in listOf("https", "http", "mailto", "tel")) {
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
+            }
+            return true
+        }
         override fun onPageFinished(view: WebView, url: String) { onFinished() }
     }
     @SuppressLint("SetJavaScriptEnabled")

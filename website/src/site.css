@@ -52,7 +52,27 @@ body {
   min-inline-size: 0;
 }
 
+.site-header {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.site-logo {
+  flex-shrink: 0;
+}
+
+.site-logo img {
+  inline-size: 4rem;
+}
+
+.site-menu {
+  margin-inline-start: auto;
+  min-inline-size: 0;
+}
+
 .site-menu > ul {
+  justify-content: flex-end;
+  margin-block: 0;
   padding-inline: 0;
   list-style: none;
 }
