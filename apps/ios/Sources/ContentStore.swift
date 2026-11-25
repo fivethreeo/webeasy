@@ -314,7 +314,7 @@ final class ContentStore: @unchecked Sendable {
                     try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try text(document, "html").write(to: target, atomically: true, encoding: .utf8)
                 }
-                for path in ["assets/site.css", "assets/site.js"] + references {
+                for path in ["assets/site.css", "assets/site.js", "assets/logo.svg"] + references {
                     guard path.hasPrefix("assets/") || path.hasPrefix("media/") else { throw ContentError.invalid("Invalid media reference.") }
                     if path.hasPrefix("media/"),
                        try rows("SELECT id FROM media WHERE filename = ?", [String(path.dropFirst(6))]).isEmpty {

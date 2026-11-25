@@ -241,7 +241,7 @@ class ContentStore(private val context: Context) :
                 require(path.endsWith(".html"))
                 safeFile(directory, path).also { it.parentFile!!.mkdirs() }.writeText(record.getString("html"))
             }
-            for (path in listOf("assets/site.css", "assets/site.js") + List(references.length()) { references.getString(it) }) {
+            for (path in listOf("assets/site.css", "assets/site.js", "assets/logo.svg") + List(references.length()) { references.getString(it) }) {
                 val target = safeFile(directory, path).also { it.parentFile!!.mkdirs() }
                 if (path.startsWith("assets/")) context.assets.open("website/$path").use { source -> target.outputStream().use(source::copyTo) }
                 else {

@@ -83,7 +83,9 @@ class ContentStoreTest {
         val archive = store.exportSite(files, JSONArray().put("assets/coast.svg").put("media/$filename"))
         ZipFile(archive).use { zip ->
             val entries = zip.entries().asSequence().map { it.name }.toSet()
-            assertTrue(entries.containsAll(setOf("index.html", "about/team/index.html", "assets/site.css", "assets/site.js", "assets/coast.svg", "media/$filename")))
+            assertTrue(entries.containsAll(setOf("index.html", "about/team/index.html", "assets/site.css", "assets/site.js", "assets/logo.svg", "assets/coast.svg", "media/$filename")))
+            assertArrayEquals(context.assets.open("website/assets/logo.svg").use { it.readBytes() },
+                zip.getInputStream(zip.getEntry("assets/logo.svg")).readBytes())
             assertFalse(entries.any { it.endsWith(".sqlite") || it in setOf("storage.sql", "content.json", "catalog.json", "editor.html", "assets/editor.js") })
             assertFalse(entries.contains("media/${unused.getString("filename")}"))
             assertArrayEquals(bytes, zip.getInputStream(zip.getEntry("media/$filename")).readBytes())
