@@ -85,13 +85,14 @@ function restoreSelection(field, savedRange = selectionRange) {
 }
 function figureDetails(kind) {
   const dialog = $("media-details");
+  $("media-basename").value = "";
   $("media-alt").value = "";
   $("media-alt").parentElement.hidden = kind !== "image";
   $("media-caption").value = "";
   dialog.returnValue = "";
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "insert"
-      ? { alt: $("media-alt").value, caption: $("media-caption").value } : null), { once: true });
+      ? { alt: $("media-alt").value, caption: $("media-caption").value, basename: $("media-basename").value.trim() } : null), { once: true });
     dialog.showModal();
   });
 }
@@ -263,15 +264,15 @@ export function richEditor(record, key, labelText, options = {}) {
   marks.append(block);
   for (const kind of ["image", "video"]) {
     const control = button(kind === "image" ? "Image" : "Video", async () => {
-      rememberSelection(field);
+      const mediaRange = restoreSelection(field).cloneRange();
       control.disabled = true;
       try {
+        const details = await figureDetails(kind);
+        if (!details) { status("Figure cancelled."); restoreSelection(field, mediaRange); return; }
         status("Choose media on your phone...");
-        const media = await request("pickMedia", { kind });
+        const media = await request("pickMedia", { kind, basename: details.basename });
         if (!media) { status("Media selection cancelled."); return; }
         if (!contentProject.media.some((item) => item.id === media.id)) contentProject.media.push(media);
-        const details = await figureDetails(kind);
-        if (!details) { status("Figure cancelled. The imported media is retained locally."); return; }
         const figure = element("figure", "stack");
         if (kind === "image") {
           const img = document.createElement("img");
@@ -290,7 +291,7 @@ export function richEditor(record, key, labelText, options = {}) {
           figure.append(video);
         }
         if (details.caption) figure.append(element("figcaption", "", details.caption));
-        const range = restoreSelection(field);
+        const range = restoreSelection(field, mediaRange);
         // Insert between blocks rather than creating invalid figures inside paragraphs.
         let block = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
         while (block?.parentElement && block.parentElement !== field) block = block.parentElement;

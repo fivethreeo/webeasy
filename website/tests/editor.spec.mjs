@@ -122,9 +122,10 @@ async function openField(page, content = "<p>Hello from the phone</p>") {
         if (method === "ready") window.WebeasyField.setValue(content);
         if (method === "change") window.__content = payload.content;
         if (method === "resize") window.__fieldHeight = payload.height;
+        if (method === "pickMedia") window.__mediaRequest = payload;
         const result = method === "pageLinks" ? { pages: project.pages, homePageId: project.pages[0].id } : method === "pickMedia" ? (payload.kind === "image"
-          ? { id: "field-image", filename: "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
-          : { id: "field-video", filename: "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize }) : null;
+          ? { id: "field-image", filename: payload.basename ? `${payload.basename}.png` : "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
+          : { id: "field-video", filename: payload.basename ? `${payload.basename}.mp4` : "native-test.mp4", mimeType: "video/mp4", originalName: "Phone clip.mp4", size: videoSize }) : null;
         queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
       },
     };
@@ -161,6 +162,28 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
   await page.getByRole("button", { name: "Phone video", exact: true }).click();
   await page.getByRole("button", { name: "Insert figure", exact: true }).click();
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
+});
+
+test("optional basenames are validated before the picker and native filenames are used in figures", async ({ page }) => {
+  await openField(page);
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("File basename (optional)").fill("../private");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(await page.evaluate(() => window.__mediaRequest)).toBeUndefined();
+  await page.getByLabel("File basename (optional)").fill("coast");
+  await page.getByLabel("Caption (optional)").fill("Our coast");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("figure img")).toHaveAttribute("src", "media/coast.png");
+  expect(await page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "coast" });
+  await page.getByRole("button", { name: "Phone video", exact: true }).click();
+  await expect(page.getByLabel("File basename (optional)")).toHaveValue("");
+  await page.getByLabel("File basename (optional)").fill("shore");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("figure video source")).toHaveAttribute("src", "media/shore.mp4");
+  expect(await page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "video", basename: "shore" });
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('src="media/shore.mp4"');
 });
 
 test("image and video figures can be removed without deleting surrounding content", async ({ page, isMobile }) => {

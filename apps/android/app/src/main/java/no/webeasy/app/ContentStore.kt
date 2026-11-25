@@ -196,12 +196,29 @@ class ContentStore(private val context: Context) :
         }
     }
 
-    fun importMedia(input: InputStream, mimeType: String, originalName: String): JSONObject {
+    fun importMedia(input: InputStream, mimeType: String, originalName: String, basename: String = ""): JSONObject {
         val id = UUID.randomUUID().toString()
+        val requested = basename.trim()
+        val stem = requested.ifEmpty { id }
         val temporary = File(mediaDirectory, "$id.incoming")
         var destination: File? = null
+        fun nextFile(extension: String): File {
+            var number = 1
+            while (true) {
+                val filename = "$stem${if (number == 1) "" else "-$number"}.$extension"
+                val file = safeFile(mediaDirectory, filename)
+                if (!file.exists() && rows(readableDatabase, "SELECT id FROM media WHERE filename = ? COLLATE NOCASE",
+                        arrayOf(filename)).length() == 0) return file
+                number += 1
+            }
+        }
         try {
-            input.use { source -> temporary.outputStream().use(source::copyTo) }
+            input.use { source ->
+                require(requested.isEmpty() || requested.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,79}"))) {
+                    "Use up to 80 letters, numbers, hyphens, or underscores for the basename, without an extension."
+                }
+                temporary.outputStream().use(source::copyTo)
+            }
             require(temporary.length() > 0) { "The selected media file is empty." }
             var type = mimeType.lowercase()
             if (type in setOf("image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence")) {
@@ -211,13 +228,13 @@ class ContentStore(private val context: Context) :
                 while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > 2560) options.inSampleSize *= 2
                 val image = BitmapFactory.decodeFile(temporary.path, options) ?: error("Cannot decode this image. Choose JPEG or PNG.")
                 try {
-                    destination = File(mediaDirectory, "$id.jpg")
+                    destination = nextFile("jpg")
                     destination.outputStream().use { require(image.compress(Bitmap.CompressFormat.JPEG, 90, it)) }
                 } finally { image.recycle() }
                 type = "image/jpeg"
             } else {
                 val extension = extensions[type] ?: error("Unsupported media format. Use JPEG, PNG, GIF, WebP, or MP4.")
-                destination = File(mediaDirectory, "$id.$extension")
+                destination = nextFile(extension)
                 check(temporary.renameTo(destination)) { "Cannot store the selected media." }
             }
             val file = requireNotNull(destination)

@@ -176,7 +176,11 @@ page/subpage choice; existing links can be edited or removed. Phone images and v
 as `<figure>` containing `<img>` or `<video><source>`, with optional `<figcaption>`.
 Text inside a figure is kept in one `<figcaption>`. Select a picture, video, or
 caption and choose **Remove figure** to remove it without deleting the stored media.
-The image dialog provides alternative text. Imported files are copied into
+The figure dialog provides an optional file basename before opening the phone picker.
+Leave it blank for an automatic name; extensions follow the imported format, and
+duplicate names get numeric suffixes such as `coast-2.jpg`. Basenames accept up to
+80 letters, numbers, hyphens, or underscores, starting with a letter or number.
+The image dialog also provides alternative text. Imported files are copied into
 app-owned media storage; content refers to portable `media/<filename>` paths,
 never temporary picker URLs. HEIC/HEIF images are converted to JPEG where native
 decoding supports them. Compatible files are otherwise preserved, including

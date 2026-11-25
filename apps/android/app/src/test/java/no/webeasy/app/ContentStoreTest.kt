@@ -93,8 +93,38 @@ class ContentStoreTest {
     }
 
     @Test
+    fun namedMediaKeepsItsExtensionAndNumbersCollisionsWithoutOverwriting() {
+        val bytes = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+        val first = store.importMedia(ByteArrayInputStream(bytes), "image/png", "Phone.png", " coast ")
+        val second = store.importMedia(ByteArrayInputStream(bytes + byteArrayOf(0)), "image/png", "Other.png", "coast")
+        val third = store.importMedia(ByteArrayInputStream(bytes), "image/png", "Third.png", "Coast")
+        val video = store.importMedia(ByteArrayInputStream(byteArrayOf(1, 2, 3)), "video/mp4", "Phone.mp4", "coast")
+        assertEquals("coast.png", first.getString("filename"))
+        assertEquals("coast-2.png", second.getString("filename"))
+        assertEquals("Coast-3.png", third.getString("filename"))
+        assertEquals("coast.mp4", video.getString("filename"))
+        assertArrayEquals(bytes, java.io.File(store.mediaDirectory, "coast.png").readBytes())
+        assertArrayEquals(bytes + byteArrayOf(0), java.io.File(store.mediaDirectory, "coast-2.png").readBytes())
+        store.close(); store = ContentStore(context)
+        assertEquals(setOf("coast.png", "coast-2.png", "Coast-3.png", "coast.mp4"),
+            store.project().getJSONArray("media").let { records ->
+                (0 until records.length()).map { records.getJSONObject(it).getString("filename") }.toSet()
+            })
+        val site = store.prepareSite(JSONArray().put(JSONObject().put("path", "index.html").put("html", "<h1>Home</h1>")),
+            JSONArray().put("media/coast.png").put("media/coast-2.png").put("media/coast.mp4"))
+        assertArrayEquals(bytes, java.io.File(site, "media/coast.png").readBytes())
+        assertArrayEquals(bytes + byteArrayOf(0), java.io.File(site, "media/coast-2.png").readBytes())
+        assertArrayEquals(byteArrayOf(1, 2, 3), java.io.File(site, "media/coast.mp4").readBytes())
+    }
+
+    @Test
     fun invalidMediaDoesNotLeaveFilesOrRowsAndTraversalIsRejected() {
         assertThrows(Exception::class.java) { store.importMedia(ByteArrayInputStream(byteArrayOf(1)), "application/octet-stream", "unknown") }
+        for (basename in listOf("../private", "/photo", "folder/photo", "photo.jpg", "two words", "a".repeat(81))) {
+            assertThrows(IllegalArgumentException::class.java) {
+                store.importMedia(ByteArrayInputStream(byteArrayOf(1)), "image/png", "Phone.png", basename)
+            }
+        }
         assertEquals(0, store.project().getJSONArray("media").length())
         assertEquals(0, store.mediaDirectory.listFiles()!!.size)
         for (path in listOf("../webeasy.sqlite", "/private/file", "media/%2e%2e/file", "child/../../file")) {

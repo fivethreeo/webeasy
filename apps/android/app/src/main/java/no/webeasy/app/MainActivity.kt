@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
 
     private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null,
                               val contentKey: String? = null)
-    private data class PendingMedia(val id: String, val kind: String, val view: WebView)
+    private data class PendingMedia(val id: String, val kind: String, val view: WebView, val basename: String)
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val pending = pendingMedia ?: return@registerForActivityResult
@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
                 } ?: "media"
                 val type = contentResolver.getType(uri) ?: URLConnection.guessContentTypeFromName(name) ?: ""
                 require(type.startsWith("${pending.kind}/"))
-                store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name)
+                store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name, pending.basename)
             }.fold(onSuccess = { media ->
                 runOnUiThread {
                     project?.getJSONArray("media")?.put(media)
@@ -561,7 +561,7 @@ class MainActivity : ComponentActivity() {
                         val kind = payload.optString("kind")
                         if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
                         else {
-                            pendingMedia = PendingMedia(id, kind, view)
+                            pendingMedia = PendingMedia(id, kind, view, payload.optString("basename"))
                             mediaPicker.launch(PickVisualMediaRequest(if (kind == "image") ActivityResultContracts.PickVisualMedia.ImageOnly else ActivityResultContracts.PickVisualMedia.VideoOnly))
                         }
                     }

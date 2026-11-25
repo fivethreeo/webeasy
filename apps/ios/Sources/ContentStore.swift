@@ -262,9 +262,25 @@ final class ContentStore: @unchecked Sendable {
         try WebsiteFiles.file(root, path)
     }
 
-    func importMedia(_ source: URL, kind: String, typeIdentifier: String) throws -> [String: Any] {
+    func importMedia(_ source: URL, kind: String, typeIdentifier: String, basename: String = "") throws -> [String: Any] {
         try queue.sync {
             let id = UUID().uuidString
+            let requested = basename.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard requested.isEmpty || requested.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$", options: .regularExpression)
+                == (requested.startIndex..<requested.endIndex) else {
+                throw ContentError.invalid("Use up to 80 letters, numbers, hyphens, or underscores for the basename, without an extension.")
+            }
+            let stem = requested.isEmpty ? id : requested
+            func nextFile(_ ext: String) throws -> URL {
+                var number = 1
+                while true {
+                    let filename = "\(stem)\(number == 1 ? "" : "-\(number)").\(ext)"
+                    let file = try Self.safeFile(mediaDirectory, filename)
+                    if !FileManager.default.fileExists(atPath: file.path),
+                       try rows("SELECT id FROM media WHERE filename = ? COLLATE NOCASE", [filename]).isEmpty { return file }
+                    number += 1
+                }
+            }
             let type = UTType(filenameExtension: source.pathExtension) ?? UTType(typeIdentifier)
             var mime = type?.preferredMIMEType ?? ""
             let formats = ["image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp",
@@ -275,13 +291,13 @@ final class ContentStore: @unchecked Sendable {
                     throw ContentError.invalid("Cannot read this image. Choose JPEG or PNG.")
                 }
                 mime = "image/jpeg"
-                file = mediaDirectory.appendingPathComponent("\(id).jpg")
+                file = try nextFile("jpg")
                 try data.write(to: file, options: .atomic)
             } else {
                 guard mime.hasPrefix("\(kind)/"), let ext = formats[mime] else {
                     throw ContentError.invalid("Unsupported media format. MP4 is recommended for video.")
                 }
-                file = mediaDirectory.appendingPathComponent("\(id).\(ext)")
+                file = try nextFile(ext)
                 try FileManager.default.copyItem(at: source, to: file)
             }
             do {

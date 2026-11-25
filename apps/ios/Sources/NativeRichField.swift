@@ -35,7 +35,7 @@ struct NativeRichField: UIViewRepresentable {
         weak var view: WKWebView?
         var ready = false
         var value = ""
-        private var pending: (String, String)?
+        private var pending: (String, String, String)?
         init(_ parent: NativeRichField) { self.parent = parent }
 
         func setValue(_ content: String) {
@@ -78,7 +78,7 @@ struct NativeRichField: UIViewRepresentable {
                       let rootController = view?.window?.rootViewController else { send(id, NSNull(), "Cannot open media picker."); return }
                 var presenter = rootController
                 while let presented = presenter.presentedViewController { presenter = presented }
-                pending = (id, kind)
+                pending = (id, kind, payload["basename"] as? String ?? "")
                 var config = PHPickerConfiguration()
                 config.filter = kind == "image" ? .images : .videos
                 config.selectionLimit = 1
@@ -102,7 +102,7 @@ struct NativeRichField: UIViewRepresentable {
                     let serialized: String
                     do {
                         guard let url else { throw ContentError.invalid(error?.localizedDescription ?? "Cannot read media.") }
-                        let media = try store.importMedia(url, kind: pending.1, typeIdentifier: identifier)
+                        let media = try store.importMedia(url, kind: pending.1, typeIdentifier: identifier, basename: pending.2)
                         serialized = Self.response(pending.0, media)
                     } catch { serialized = Self.response(pending.0, NSNull(), error.localizedDescription) }
                     DispatchQueue.main.async {

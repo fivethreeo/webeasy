@@ -46,6 +46,8 @@
   <dialog id="media-details">
     <form class="stack" method="dialog">
       <h2>Figure details</h2>
+      <label class="stack">File basename (optional)<input id="media-basename" type="text" maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,79}" autocapitalize="none" spellcheck="false" aria-describedby="media-basename-help"></label>
+      <p id="media-basename-help">Leave blank for an automatic name. Use letters, numbers, hyphens, or underscores, without an extension. Duplicate names get a number.</p>
       <label class="stack">Alternative text (images)<input id="media-alt" type="text"></label>
       <label class="stack">Caption (optional)<input id="media-caption" type="text"></label>
       <p>MP4 is recommended for videos. Other formats depend on the viewer's browser and codecs.</p>
