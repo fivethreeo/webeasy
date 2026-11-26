@@ -191,7 +191,7 @@ export function richEditor(record, key, labelText, options = {}) {
   const wrapper = element("div", "stack");
   const label = element("h3", "", labelText);
   label.id = `label-${record.id}-${key}`;
-  const toolbar = element("div", "stack formatting");
+  const toolbar = element("div", "cluster formatting");
   toolbar.setAttribute("role", "group");
   toolbar.setAttribute("aria-label", `${labelText} formatting`);
   const field = element("div", "box stack rich-editor");
@@ -206,8 +206,8 @@ export function richEditor(record, key, labelText, options = {}) {
     activeFigure = figure;
     activeFigure?.setAttribute("data-editor-selected", "");
   };
-  const marks = element("div", "cluster formatting-marks");
-  const mediaActions = element("div", "cluster media-actions");
+  const marks = document.createDocumentFragment();
+  const mediaActions = document.createDocumentFragment();
   const markControls = [];
   const refreshMarks = () => {
     const selection = window.getSelection();
@@ -267,7 +267,7 @@ export function richEditor(record, key, labelText, options = {}) {
     control.title = text;
     editorIcon(control, {
       Bold: "strong", Italic: "italic", Emphasis: "emphasis", Strike: "strike", Underline: "underline",
-      Bullets: "bulletList", Numbers: "orderedLint",
+      Bullets: "bulletList", Numbers: "orderedLint", Quote: "quote",
     }[text]);
     if (["bold", "italic", "strikeThrough", "underline"].includes(command)) {
       control.setAttribute("aria-pressed", "false");

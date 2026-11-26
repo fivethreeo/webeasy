@@ -599,6 +599,49 @@ test("full rich fields retain list controls while paragraph-only fields omit the
   await expect.poll(() => page.evaluate(() => window.__content)).toContain("<ul>");
 });
 
+test("compact toolbar stays on one scrollable line at narrow widths and enlarged text", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await openField(page);
+  const toolbar = page.getByRole("group", { name: "Content formatting", exact: true });
+  for (const size of ["125%", "250%"]) {
+    await page.getByRole("textbox", { name: "Content", exact: true }).focus();
+    await page.locator("html").evaluate((element, size) => { element.style.fontSize = size; }, size);
+    const layout = await toolbar.evaluate((toolbar) => {
+      const controls = [...toolbar.querySelectorAll("button,select")];
+      return {
+        centers: controls.map((control) => {
+          const rect = control.getBoundingClientRect();
+          return rect.y + rect.height / 2;
+        }),
+        padding: parseFloat(getComputedStyle(toolbar.querySelector(".icon-button")).paddingLeft),
+        fontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        overflow: toolbar.scrollWidth > toolbar.clientWidth,
+        pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+    });
+    expect(Math.max(...layout.centers) - Math.min(...layout.centers)).toBeLessThanOrEqual(1);
+    expect(layout.padding).toBeLessThanOrEqual(layout.fontSize * 0.15);
+    expect(layout.overflow).toBe(true);
+    expect(layout.pageOverflow).toBe(false);
+    await page.getByLabel("Paragraph or heading").focus();
+    const heading = await page.getByLabel("Paragraph or heading").boundingBox();
+    const strip = await toolbar.boundingBox();
+    expect(heading.x).toBeGreaterThanOrEqual(strip.x - 1);
+    expect(heading.x + heading.width).toBeLessThanOrEqual(strip.x + strip.width + 1);
+  }
+});
+
+test("Prosango quote icon keeps its accessible name and applies blockquote formatting", async ({ page }) => {
+  await openField(page, "<p>Quoted text</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const quote = page.getByRole("button", { name: "Quote", exact: true });
+  await expect(quote.locator("svg")).toHaveAttribute("aria-hidden", "true");
+  await field.focus();
+  await quote.click();
+  await expect(field.locator("blockquote")).toHaveText("Quoted text");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<blockquote>");
+});
+
 test("SE-sized keyboard viewport keeps media actions reachable after scrolling long content", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 240 });
   await openField(page, Array.from({ length: 30 }, (_, i) => `<p>Long content paragraph ${i}</p>`).join(""));

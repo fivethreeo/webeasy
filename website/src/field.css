@@ -13,7 +13,7 @@ body {
   inset-block-start: var(--editor-visible-top, 0px);
   z-index: 1;
   background: var(--color-light);
-  padding-block: var(--s-2);
+  padding-block: var(--s-5);
 }
 
 .field-shell > .stack > h3 {

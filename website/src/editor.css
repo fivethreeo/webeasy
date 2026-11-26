@@ -50,25 +50,21 @@ select {
 }
 
 .formatting {
-  --gap: var(--s-2);
-  --space: var(--s-2);
+  --gap: var(--s-5);
   min-inline-size: 0;
-}
-
-.formatting-marks,
-.media-actions {
+  align-items: center;
   flex-wrap: nowrap;
   overflow-x: auto;
   max-inline-size: 100%;
 }
 
-.formatting-marks > *,
-.media-actions > * {
+.formatting > * {
   flex-shrink: 0;
 }
 
-.formatting button {
-  padding: var(--s-2) var(--s-1);
+.formatting button,
+.formatting select {
+  padding: var(--s-5);
 }
 
 .formatting button[aria-pressed="true"] {
@@ -108,13 +104,13 @@ dialog::backdrop {
 }
 
 .editor-icon {
+  display: block;
   inline-size: 1.25em;
   block-size: 1.25em;
   fill: currentColor;
-  vertical-align: middle;
 }
 
 .icon-button {
-  min-inline-size: 2.2rem;
-  min-block-size: 2.2rem;
+  min-inline-size: 1.5rem;
+  min-block-size: 1.5rem;
 }
