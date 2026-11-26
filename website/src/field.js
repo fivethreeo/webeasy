@@ -2,20 +2,24 @@ import "./field.css";
 import { figureDetails, richEditor, request } from "./editor.js";
 
 let value = "";
+let configuration = "";
 let nativeMediaDetails = false;
 const native = Boolean(window.WebeasyNative || window.webkit?.messageHandlers?.webeasy);
 const send = (method, payload) => {
   if (native) request(method, payload).catch((error) => { document.getElementById("status").textContent = error.message; });
 };
 window.WebeasyField = {
-  setValue(html) {
-    if (html === value && document.querySelector(".rich-editor")) return;
+  setValue(html, options = {}) {
+    const serialized = JSON.stringify(options);
+    if (html === value && configuration === serialized && document.querySelector(".rich-editor")) return;
     value = html;
+    configuration = serialized;
     const record = { id: "field", content: html };
     document.getElementById("field").replaceChildren(richEditor(record, "content", "Content", {
       project: { media: [] },
+      paragraphsOnly: options.paragraphsOnly === true,
       getLinkProject: () => native ? request("pageLinks") : request("load").then((result) => result.project),
-      getMediaDetails: (kind) => nativeMediaDetails ? request("mediaDetails", { kind }) : figureDetails(kind),
+      getMediaDetails: (kind) => nativeMediaDetails ? request("mediaDetails", { kind }) : figureDetails(kind, options),
       onChange(html) { value = html; send("change", { content: html }); },
     }));
   },

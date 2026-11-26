@@ -53,6 +53,63 @@ private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unc
 }
 
 enum SitePublisher {
+    private static let templateLimit = 256 * 1024
+
+    static func loadTemplates(_ destination: HostingDestination, paths: [String]) async throws -> [String: String] {
+        guard !paths.isEmpty, paths.allSatisfy({
+            $0.range(of: "^webeasy_templates/(templates|components)/[a-z][a-z0-9-]*\\.html$", options: .regularExpression) != nil
+        }) else { throw ContentError.invalid("Invalid template paths.") }
+        let prefix = try PublishingPaths.uploadPrefix(destination.uploadSubfolder)
+        do {
+            var sources: [String: String] = [:]
+            if destination.protocol == "sftp" {
+                let client = try await sftpClient(destination)
+                do {
+                    let sftp = try await client.openSFTP()
+                    do {
+                        for path in paths {
+                            let data = try await sftp.withFile(filePath: remotePath(destination, prefix + path), flags: [.read]) { file in
+                                var data = Data()
+                                while true {
+                                    let buffer = try await file.read(from: UInt64(data.count), length: 8192)
+                                    if buffer.readableBytes == 0 { break }
+                                    guard data.count + buffer.readableBytes <= templateLimit else {
+                                        throw ContentError.invalid("Template is too large.")
+                                    }
+                                    data.append(contentsOf: buffer.readableBytesView)
+                                }
+                                return data
+                            }
+                            guard let source = String(data: data, encoding: .utf8) else { throw ContentError.invalid("Templates must use UTF-8.") }
+                            sources[path] = source
+                        }
+                        try await sftp.close()
+                    } catch { try? await sftp.close(); throw error }
+                    try await client.close()
+                } catch { try? await client.close(); throw error }
+            } else {
+                let provider = try ftpProvider(destination)
+                for path in paths {
+                    let data = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                        provider.contents(path: prefix + path, offset: 0, length: templateLimit + 1) { data, error in
+                            if let error { continuation.resume(throwing: error) }
+                            else if let data { continuation.resume(returning: data) }
+                            else { continuation.resume(throwing: ContentError.invalid("Cannot read template.")) }
+                        }
+                    }
+                    guard data.count <= templateLimit, let source = String(data: data, encoding: .utf8) else {
+                        throw ContentError.invalid("Template is oversized or not UTF-8.")
+                    }
+                    sources[path] = source
+                }
+            }
+            return sources
+        } catch let approval as HostKeyApproval { throw approval }
+        catch {
+            throw ContentError.invalid("Cannot load templates. Publish once to create them, then check the destination, read permissions, certificate or saved server key. Local templates have not changed.")
+        }
+    }
+
     static func publish(_ destination: HostingDestination, root: URL) async throws {
         let uploadPrefix = try PublishingPaths.uploadPrefix(destination.uploadSubfolder)
         let manager = FileManager.default
@@ -101,7 +158,7 @@ enum SitePublisher {
         }
     }
 
-    private static func ftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
+    private static func ftpProvider(_ destination: HostingDestination) throws -> FTPFileProvider {
         guard ["ftp", "ftps"].contains(destination.protocol) else { throw ContentError.invalid("Unsupported protocol.") }
         var components = URLComponents()
         components.scheme = destination.protocol == "ftps" ? "ftpes" : "ftp"
@@ -115,7 +172,13 @@ enum SitePublisher {
         }
         provider.serverTrustPolicy = .performDefaultEvaluation(validateHost: true)
         provider.securedDataConnection = true
+        return provider
+    }
+
+    private static func ftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
+        let provider = try ftpProvider(destination)
         var directories = Set<String>()
+        var templateListings: [String: Set<String>] = [:]
         for (relativePath, file) in files {
             let path = uploadPrefix + relativePath
             let parts = path.split(separator: "/").dropLast()
@@ -142,39 +205,62 @@ enum SitePublisher {
                 }
             }
             do {
+                if relativePath.hasPrefix("webeasy_templates/") {
+                    let parent = parts.joined(separator: "/")
+                    if templateListings[parent] == nil {
+                        templateListings[parent] = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Set<String>, Error>) in
+                            provider.contentsOfDirectory(path: parent) { files, error in
+                                if let error { continuation.resume(throwing: error) }
+                                else { continuation.resume(returning: Set(files.map(\.name))) }
+                            }
+                        }
+                    }
+                    if templateListings[parent]?.contains(file.lastPathComponent) == true { continue }
+                }
                 try await operation { done in provider.copyItem(localFile: file, to: path, overwrite: true, completionHandler: done) }
             } catch { throw PublishingFailure(step: "uploading \(path)", reason: safeReason(error)) }
         }
     }
 
-    private static func sftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
+    private static func remotePath(_ destination: HostingDestination, _ path: String) -> String {
+        let prefix = destination.directory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return (destination.directory.hasPrefix("/") ? "/" : "") + [prefix, path].filter { !$0.isEmpty }.joined(separator: "/")
+    }
+
+    private static func sftpClient(_ destination: HostingDestination) async throws -> SSHClient {
         let validator = HostKeyCheck(pin: destination._hostKeyFingerprint)
         let settings = SSHClientSettings(host: destination.host, port: destination.port,
             authenticationMethod: { .passwordBased(username: destination.username, password: destination.password) },
             hostKeyValidator: .custom(validator))
-        let client: SSHClient
-        do { client = try await SSHClient.connect(to: settings) }
+        do { return try await SSHClient.connect(to: settings) }
         catch {
             if destination._hostKeyFingerprint == nil, let fingerprint = validator.fingerprint {
                 throw HostKeyApproval(host: destination.host, port: destination.port, fingerprint: fingerprint)
             }
             throw error
         }
+    }
+
+    private static func sftp(_ destination: HostingDestination, files: [(String, URL)], uploadPrefix: String) async throws {
+        let client = try await sftpClient(destination)
         do {
             let sftp = try await client.openSFTP()
             do {
                 var directories = Set<String>()
                 for (relativePath, file) in files {
                     let path = uploadPrefix + relativePath
-                    let prefix = destination.directory == "/" ? "" : destination.directory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    let remote = destination.directory.hasPrefix("/") ? "/" + [prefix, path].filter { !$0.isEmpty }.joined(separator: "/")
-                        : [prefix, path].filter { !$0.isEmpty }.joined(separator: "/")
+                    let remote = remotePath(destination, path)
                     let parts = remote.split(separator: "/").dropLast()
                     for count in 1..<(parts.count + 1) {
                         let directory = (remote.hasPrefix("/") ? "/" : "") + parts.prefix(count).joined(separator: "/")
                         if directories.insert(directory).inserted { try? await sftp.createDirectory(atPath: directory) }
                     }
-                    try await sftp.withFile(filePath: remote, flags: [.write, .create, .truncate]) { remoteFile in
+                    let preserve = relativePath.hasPrefix("webeasy_templates/")
+                    if preserve {
+                        do { _ = try await sftp.getAttributes(at: remote); continue }
+                        catch let status as SFTPMessage.Status where status.errorCode == .noSuchFile {}
+                    }
+                    try await sftp.withFile(filePath: remote, flags: preserve ? [.write, .create, .forceCreate] : [.write, .create, .truncate]) { remoteFile in
                         let input = try FileHandle(forReadingFrom: file)
                         defer { try? input.close() }
                         var offset: UInt64 = 0

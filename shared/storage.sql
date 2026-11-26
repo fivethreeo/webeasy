@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS pages (
     title TEXT NOT NULL,
     menu_title TEXT NOT NULL,
     template_id TEXT NOT NULL DEFAULT 'page',
+    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
+    cover_alt TEXT NOT NULL DEFAULT '',
     slug TEXT NOT NULL,
     content TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -21,6 +23,9 @@ CREATE TABLE IF NOT EXISTS news (
     slug TEXT NOT NULL,
     date TEXT NOT NULL,
     short_content TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
+    cover_alt TEXT NOT NULL DEFAULT '',
     UNIQUE(date, slug)
 );
 CREATE TABLE IF NOT EXISTS sections (
@@ -28,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sections (
     page_id TEXT REFERENCES pages(id) ON DELETE CASCADE,
     news_id TEXT REFERENCES news(id) ON DELETE CASCADE,
     heading TEXT NOT NULL,
+    subheading TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL,
     position INTEGER NOT NULL CHECK (position >= 0),
     CHECK ((page_id IS NOT NULL) + (news_id IS NOT NULL) = 1)

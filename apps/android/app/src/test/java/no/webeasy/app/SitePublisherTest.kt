@@ -34,6 +34,9 @@ class SitePublisherTest {
         resolve("index.html").writeText("<h1>New home</h1>")
         resolve("assets").mkdir(); resolve("assets/site.css").writeText("body { color: green }")
         resolve("about/team").mkdirs(); resolve("about/team/index.html").writeText("<h1>Team</h1>")
+        resolve("webeasy_templates/templates").mkdirs()
+        resolve("webeasy_templates/templates/master.html").writeText("<html>{{{navigation}}}{{{content}}}</html>")
+        resolve("webeasy_templates/templates/page.html").writeText("<article>{{{content}}}</article>")
     }
     private fun remote(): File = temporary.newFolder().apply {
         resolve("site").mkdir()
@@ -92,6 +95,32 @@ class SitePublisherTest {
             checkFiles(root, "preview/build")
             assertEquals("Old home", root.resolve("site/index.html").readText())
         }
+
+    }
+
+    @Test
+    fun ftpPreservesServerTemplatesLoadsEditsAndRejectsMissingOversizedAndInvalidFiles() {
+        val root = remote()
+        ftp(root) { port ->
+            val destination = connection("ftp", port).put("uploadSubfolder", "preview/build")
+            val master = "webeasy_templates/templates/master.html"
+            val page = "webeasy_templates/templates/page.html"
+            SitePublisher.publish(destination, site())
+            val edited = "<html>Server edit{{{content}}}</html>"
+            root.resolve("site/preview/build/$master").writeText(edited)
+            root.resolve("site/preview/build/$page").delete()
+            SitePublisher.publish(destination, site())
+            assertEquals(edited, root.resolve("site/preview/build/$master").readText())
+            assertEquals("<article>{{{content}}}</article>", root.resolve("site/preview/build/$page").readText())
+            val loaded = SitePublisher.loadTemplates(destination, listOf(master, page))
+            assertEquals(edited, loaded.getString(master))
+            root.resolve("site/preview/build/$page").writeText("x".repeat(256 * 1024 + 1))
+            assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
+            root.resolve("site/preview/build/$page").delete()
+            assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
+            assertThrows(IllegalArgumentException::class.java) { SitePublisher.loadTemplates(destination, listOf("../secret.html")) }
+            assertEquals("Old home", root.resolve("site/index.html").readText())
+        }
     }
 
     @Test
@@ -123,6 +152,10 @@ class SitePublisherTest {
                 System.setProperty("javax.net.ssl.trustStorePassword", "test-only")
                 SitePublisher.publish(connection("ftps", port), site())
                 checkFiles(root)
+                val master = "webeasy_templates/templates/master.html"
+                root.resolve("site/$master").writeText("FTPS server edit{{{content}}}")
+                SitePublisher.publish(connection("ftps", port), site())
+                assertEquals("FTPS server edit{{{content}}}", SitePublisher.loadTemplates(connection("ftps", port), listOf(master)).getString(master))
             } finally {
                 if (oldStore == null) System.clearProperty("javax.net.ssl.trustStore") else System.setProperty("javax.net.ssl.trustStore", oldStore)
                 if (oldPassword == null) System.clearProperty("javax.net.ssl.trustStorePassword") else System.setProperty("javax.net.ssl.trustStorePassword", oldPassword)
@@ -154,6 +187,10 @@ class SitePublisherTest {
             destination.put("_hostKeyFingerprint", key.fingerprint)
             SitePublisher.publish(destination, site())
             checkFiles(root)
+            val master = "webeasy_templates/templates/master.html"
+            root.resolve("site/$master").writeText("Server SFTP edit{{{content}}}")
+            SitePublisher.publish(destination, site())
+            assertEquals("Server SFTP edit{{{content}}}", SitePublisher.loadTemplates(destination, listOf(master)).getString(master))
             destination.put("uploadSubfolder", "preview/build")
             SitePublisher.publish(destination, site())
             checkFiles(root, "preview/build")
@@ -163,6 +200,7 @@ class SitePublisherTest {
             val authenticated = authentications.get()
             destination.put("_hostKeyFingerprint", "SHA256:wrong-key")
             assertThrows(IOException::class.java) { SitePublisher.publish(destination, site()) }
+            assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master)) }
             assertEquals(authenticated, authentications.get())
         } finally { server.stop(true) }
     }

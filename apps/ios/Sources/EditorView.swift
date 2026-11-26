@@ -56,12 +56,16 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     @Published var news: [ContentNode] = []
     @Published var status = "Opening local SQLite project..."
     @Published var ready = false
+    @Published var advancedUI = UserDefaults.standard.bool(forKey: "advancedUI") {
+        didSet { UserDefaults.standard.set(advancedUI, forKey: "advancedUI") }
+    }
     @Published var busy = false
     @Published var preview: NativePreview?
     @Published var homePageID: String?
     @Published var pendingHostKey: HostKeyApproval?
     let store: ContentStore?
-    let catalog: Catalog?
+    @Published var catalog: Catalog?
+    var hostKeyForTemplates = false
     private var media: [[String: Any]] = []
     private let generator = WKWebView()
     private var revision = 0
@@ -79,10 +83,10 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             store = nil
             storageError = error.localizedDescription
         }
-        catalog = try? Catalog.load()
         super.init()
         do {
             guard let store else { throw ContentError.invalid(storageError ?? "Cannot open local SQLite storage.") }
+            catalog = try Catalog.load(sources: store.templateSources())
             let project = try store.project()
             savedProject = try JSONSerialization.data(withJSONObject: project)
             publishedProject = try store.publishedSnapshot()
@@ -220,7 +224,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         guard let store else { throw ContentError.invalid("Storage unavailable.") }
         var input = project
         if compile {
-            let catalogData = try Data(contentsOf: store.websiteRoot.appendingPathComponent("catalog.json"))
+            let catalogData = try Catalog.data(sources: store.templateSources())
             input = ["project": input, "catalog": try JSONSerialization.jsonObject(with: catalogData)]
             if let publicPathPrefix { input["publicPathPrefix"] = publicPathPrefix }
         }
@@ -328,6 +332,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                     preview = NativePreview(root: directory, path: path ?? "index.html", temporary: true)
                 }
             } catch let approval as HostKeyApproval {
+                hostKeyForTemplates = false
                 pendingHostKey = approval
                 status = "Confirm the SFTP server key before publishing."
             } catch { status = error.localizedDescription }
@@ -342,8 +347,72 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             destination._hostKeyFingerprint = key.fingerprint
             try HostingCredentials.save(JSONEncoder().encode(destination))
             pendingHostKey = nil
-            site(nil, export: false, publish: true)
+            if hostKeyForTemplates { loadServerTemplates() }
+            else { site(nil, export: false, publish: true) }
         } catch { status = error.localizedDescription }
+    }
+
+    private func templateCall(_ name: String, input: Any) async throws -> [String: Any] {
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
+        let argument = try JSONSerialization.data(withJSONObject: serialized, options: .fragmentsAllowed)
+        let result = try await generator.evaluateJavaScript(
+            "window.WebeasyGenerator.\(name)(\(String(decoding: argument, as: UTF8.self)))")
+        guard let result = result as? String, let data = result.data(using: .utf8),
+              let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ContentError.invalid("Cannot process templates.")
+        }
+        if let error = output["error"] as? String { throw ContentError.invalid(error) }
+        return output
+    }
+
+    func loadServerTemplates() {
+        guard ready, !busy, let store else { return }
+        guard let data = HostingCredentials.load(),
+              let destination = try? JSONDecoder().decode(HostingDestination.self, from: data) else {
+            status = "Import your hosting setup QR first."; return
+        }
+        busy = true
+        status = "Loading templates from server..."
+        Task {
+            defer { busy = false }
+            do {
+                let current = try JSONSerialization.jsonObject(with: Catalog.data(sources: store.templateSources()))
+                let output = try await templateCall("templates", input: current)
+                guard let expected = output["sources"] as? [String: String] else { throw ContentError.invalid("Cannot list templates.") }
+                let sources = try await SitePublisher.loadTemplates(destination, paths: Array(expected.keys).sorted())
+                let updated = try await templateCall("loadTemplates", input: ["catalog": current, "sources": sources, "project": project])
+                guard let catalogObject = updated["catalog"] else { throw ContentError.invalid("Cannot read templates.") }
+                let updatedCatalog = try JSONDecoder().decode(Catalog.self, from: JSONSerialization.data(withJSONObject: catalogObject))
+                let sourceData = try JSONSerialization.data(withJSONObject: sources)
+                try await Task.detached { try store.saveTemplateSources(sourceData) }.value
+                catalog = updatedCatalog
+                status = "Templates loaded and saved locally. Previews, exports and the next publish use them."
+            } catch let approval as HostKeyApproval {
+                hostKeyForTemplates = true; pendingHostKey = approval
+                status = "Confirm the SFTP server key before loading templates."
+            } catch { status = "Templates not loaded: \(error.localizedDescription) Local templates have not changed." }
+        }
+    }
+
+    func previewTemplate(_ id: String) {
+        guard ready, !busy, let store else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let current = try JSONSerialization.jsonObject(with: Catalog.data(sources: store.templateSources()))
+                let output = try await templateCall("previewTemplate", input: ["catalog": current, "id": id, "media": media])
+                let data = try JSONSerialization.data(withJSONObject: output)
+                let directory = try await Task.detached {
+                    guard let output = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let files = output["files"] as? [[String: Any]], let references = output["referencedMedia"] as? [String] else {
+                        throw ContentError.invalid("Cannot preview template.")
+                    }
+                    return try store.exportSite(files, references: references)
+                }.value
+                preview = NativePreview(root: directory, path: "index.html", temporary: true)
+            } catch { status = error.localizedDescription }
+        }
     }
 
     func pagePath(_ id: String) -> String? {
@@ -364,12 +433,18 @@ struct EditorView: View {
     @StateObject private var model = NativeEditorModel()
 
     var body: some View {
-        TabView {
-            contentList(news: false).tabItem { Label("Pages", systemImage: "doc") }
-            contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
-            examples(model.catalog?.templates ?? [], title: "Templates").tabItem { Label("Templates", systemImage: "rectangle") }
-            ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
-            HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
+        VStack(spacing: 0) {
+            Picker("Editor mode", selection: $model.advancedUI) {
+                Text("Simple").tag(false)
+                Text("Advanced").tag(true)
+            }.pickerStyle(.segmented).padding().disabled(model.busy)
+            TabView {
+                contentList(news: false).tabItem { Label("Pages", systemImage: "doc") }
+                contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
+                examples(model.catalog?.templates ?? [], title: "Templates").tabItem { Label("Templates", systemImage: "rectangle") }
+                ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
+                HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
+            }
         }
         .sheet(item: $model.preview) { item in
             if item.path.isEmpty {
@@ -382,6 +457,13 @@ struct EditorView: View {
                 }
                 .onDisappear { if item.temporary { try? FileManager.default.removeItem(at: item.root) } }
             }
+        }
+        .alert("Trust SFTP server key?", isPresented: Binding(get: { model.pendingHostKey != nil },
+            set: { if !$0 { model.pendingHostKey = nil } }), presenting: model.pendingHostKey) { key in
+            Button(model.hostKeyForTemplates ? "Trust and load" : "Trust and publish") { model.trustHostKey(key) }
+            Button("Cancel", role: .cancel) {}
+        } message: { key in
+            Text("\(key.host):\(key.port)\n\(key.fingerprint)\nCompare this fingerprint with your server before trusting it. No password has been sent.")
         }
     }
 
@@ -421,7 +503,15 @@ struct EditorView: View {
 
     private func examples(_ entries: [CatalogEntry], title: String) -> some View {
         NavigationStack {
-            List(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry) } }
+            List {
+                Text(model.status)
+                if model.advancedUI {
+                    Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
+                    Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+                }
+                if model.busy { ProgressView() }
+                ForEach(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) } }
+            }
                 .navigationTitle(title)
         }
     }
@@ -448,6 +538,10 @@ private struct NativeContentForm: View {
     let kind: ContentKind
     @ObservedObject var model: NativeEditorModel
     @State private var editingContent = false
+    @State private var editingShort = false
+    @State private var editingCover = false
+    @State private var pickingCover = false
+    @State private var coverOptions: NativeCoverOptions?
     @State private var confirmingBack = false
     @Environment(\.dismiss) private var dismiss
 
@@ -488,11 +582,33 @@ private struct NativeContentForm: View {
                 DatePicker("Date", selection: date, displayedComponents: .date)
             } else {
                 LabeledTextField(title: kind == .aside ? "Heading (optional)" : "Heading", text: text("heading"))
+                if kind == .section { LabeledTextField(title: "Subheading (optional)", text: text("subheading")) }
             }
             Section(kind == .news ? "Short content" : "Content") {
-                Button(kind == .news ? "Edit short content" : "Edit content") { editingContent = true }
+                Button(kind == .news ? "Edit short content" : "Edit content") { editingShort = kind == .news; editingContent = true }
+                if kind == .news { Text("Paragraphs and inline formatting only, including links.") }
             }
-            if kind == .page || kind == .news {
+            if kind == .news {
+                Section("Long content") {
+                    Button("Edit long content") { editingShort = false; editingContent = true }
+                }
+            }
+            if model.advancedUI && (kind == .page || kind == .news) {
+                Section("Cover image (optional)") {
+                    let coverID = node.fields["coverMediaId"] ?? ""
+                    if !coverID.isEmpty { Text("Cover selected") }
+                    Button(coverID.isEmpty ? "Add cover image" : "Replace cover image") {
+                        coverOptions = nil; editingCover = true
+                    }.disabled(model.busy)
+                    if !coverID.isEmpty {
+                        LabeledTextField(title: "Cover alternative text", text: text("coverAlt"))
+                        Button("Remove cover image") { node.fields["coverMediaId"] = ""; node.fields["coverAlt"] = ""; model.changed() }
+                            .disabled(model.busy)
+                    }
+                    Text("Covers must be at least 1200 pixels wide. Optional resizing and JPEG quality are available.")
+                }
+            }
+            if model.advancedUI && (kind == .page || kind == .news) {
                 Section("Sections") {
                     ForEach(node.sections) { section in
                         NavigationLink(section.fields["heading"] ?? "Section") { NativeContentForm(node: section, kind: .section, model: model) }
@@ -540,13 +656,38 @@ private struct NativeContentForm: View {
         }
         .fullScreenCover(isPresented: $editingContent) {
             NavigationStack {
-                NativeRichField(content: text(kind == .news ? "shortContent" : "content"), model: model)
-                    .navigationTitle(kind == .news ? "Short content" : "Content")
+                NativeRichField(content: text(editingShort ? "shortContent" : "content"), model: model, paragraphsOnly: editingShort)
+                    .navigationTitle(editingShort ? "Short content" : kind == .news ? "Long content" : "Content")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         Button("Done") { editingContent = false }
                         Button("Save") { model.save() }.disabled(!model.ready || model.busy)
                     }
+            }
+        }
+        .fullScreenCover(isPresented: $editingCover, onDismiss: { pickingCover = coverOptions != nil }) {
+            NativeRichField.Coordinator.MediaDetailsView(kind: "image", cover: true) { details in
+                if let details {
+                    let options = details["imageOptions"] as? [String: Int] ?? [:]
+                    coverOptions = NativeCoverOptions(basename: details["basename"] as? String ?? "", alt: details["alt"] as? String ?? "",
+                        width: options["width"], quality: options["quality"])
+                }
+                editingCover = false
+            }
+        }
+        .sheet(isPresented: $pickingCover) {
+            if let coverOptions {
+                NativeCoverPicker(model: model, options: coverOptions) { media, error in
+                    if let media, let id = media["id"] as? String {
+                        model.registerMedia(media)
+                        node.fields["coverMediaId"] = id
+                        node.fields["coverAlt"] = coverOptions.alt
+                        model.changed()
+                    } else if let error { model.status = error }
+                    model.busy = false
+                    pickingCover = false
+                }
+                .interactiveDismissDisabled(model.busy)
             }
         }
         .toolbar {

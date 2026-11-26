@@ -6,10 +6,11 @@ import { normalizeProject, referencedMedia } from "../src/content-model.js";
 
 export const contentWindow = new JSDOM("").window;
 export const sanitizeRichText = createRichTextSanitizer(contentWindow);
+export const sanitizeShortText = createRichTextSanitizer(contentWindow, true);
 
 export async function loadProject(source) {
   const input = JSON.parse(await readFile(path.join(source, "content.json"), "utf8"));
-  const project = normalizeProject(input, sanitizeRichText);
+  const project = normalizeProject(input, sanitizeRichText, sanitizeShortText);
   for (const media of referencedMedia(project, contentWindow)) await readFile(path.join(source, media));
   return project;
 }

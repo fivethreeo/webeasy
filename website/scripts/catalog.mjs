@@ -1,7 +1,13 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { render } from "../src/render.js";
-export { escapeHtml, render } from "../src/render.js";
+import { render, renderMaster, renderSection } from "../src/render.js";
+export { escapeHtml, render, renderMaster } from "../src/render.js";
+
+export function renderComponent(component, usedIds = new Set()) {
+  return component.id === "section"
+    ? renderSection(component.source, component.example, component.example.content, usedIds)
+    : render(component.source, component.example, component.example.content);
+}
 
 export async function loadCatalog(root) {
   const catalog = JSON.parse(await readFile(path.join(root, "catalog.json"), "utf8"));
@@ -30,7 +36,7 @@ export async function loadCatalog(root) {
     }
   }
   for (const component of catalog.components) {
-    render(component.source, component.example, component.example.content);
+    renderComponent(component);
     for (const [key, value] of Object.entries(component.example)) {
       if (["src", "poster"].includes(key) &&
           (typeof value !== "string" || !/^assets\/[a-zA-Z0-9/_-]+\.[a-zA-Z0-9]+$/.test(value) ||
@@ -44,12 +50,14 @@ export async function loadCatalog(root) {
     if (!Array.isArray(template.example.blocks) || !template.example.blocks.length) {
       throw new Error(`Template needs example blocks: ${template.id}`);
     }
+    const usedIds = new Set();
     const content = template.example.blocks.map((id) => {
       const component = catalog.components.find((item) => item.id === id);
       if (!component) throw new Error(`Unknown component: ${id}`);
-      return render(component.source, component.example, component.example.content);
+      return renderComponent(component, usedIds);
     }).join("\n");
-    render(template.source, template.example, content);
+    if (template.id === "master") renderMaster(template.source, template.example, content, "<nav>Example menu</nav>");
+    else render(template.source, template.example, content);
   }
   return catalog;
 }

@@ -44,7 +44,7 @@ final class ContentStore: @unchecked Sendable {
         do {
             try execute("PRAGMA foreign_keys = ON")
             let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
-            guard (0...2).contains(version) else {
+            guard (0...4).contains(version) else {
                 throw ContentError.invalid("A database migration is required. Your content has not been deleted.")
             }
             try transaction {
@@ -53,7 +53,18 @@ final class ContentStore: @unchecked Sendable {
                     guard sqlite3_exec(database, schema, nil, nil, nil) == SQLITE_OK else { throw databaseError() }
                 }
                 if version == 1 { try execute("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'") }
-                if version < 2 { try execute("PRAGMA user_version = 2") }
+                if version > 0 && version < 3 {
+                    for table in ["pages", "news"] {
+                        try execute("ALTER TABLE \(table) ADD COLUMN cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL")
+                        try execute("ALTER TABLE \(table) ADD COLUMN cover_alt TEXT NOT NULL DEFAULT ''")
+                    }
+                    try execute("ALTER TABLE sections ADD COLUMN subheading TEXT NOT NULL DEFAULT ''")
+                }
+                if version > 0 && version < 4 {
+                    try execute("ALTER TABLE news ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+                    try execute("UPDATE news SET content = short_content")
+                }
+                if version < 4 { try execute("PRAGMA user_version = 4") }
                 if try rows("SELECT value FROM metadata WHERE key = ?", ["seeded"]).isEmpty {
                     let data = try Data(contentsOf: bundled.appendingPathComponent("content.json"))
                     guard let seed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -83,6 +94,19 @@ final class ContentStore: @unchecked Sendable {
         try queue.sync {
             try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('published_project', ?)",
                         [String(decoding: data, as: UTF8.self)])
+        }
+
+        func templateSources() throws -> Data? {
+            try queue.sync {
+                try (rows("SELECT value FROM metadata WHERE key = 'template_sources'").first?["value"] as? String)?.data(using: .utf8)
+            }
+        }
+
+        func saveTemplateSources(_ data: Data) throws {
+            try queue.sync {
+                try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
+                            [String(decoding: data, as: UTF8.self)])
+            }
         }
     }
 
@@ -182,8 +206,8 @@ final class ContentStore: @unchecked Sendable {
         try writeAsides(record, owner: owner, id: id)
         for (position, section) in try list(record, "sections").enumerated() {
             let sectionID = try identity(section)
-            try execute("INSERT INTO sections (id, \(owner)_id, heading, content, position) VALUES (?, ?, ?, ?, ?)",
-                        [sectionID, id, try text(section, "heading", required: true), try text(section, "content"), position])
+            try execute("INSERT INTO sections (id, \(owner)_id, heading, subheading, content, position) VALUES (?, ?, ?, ?, ?, ?)",
+                        [sectionID, id, try text(section, "heading", required: true), section["subheading"] as? String ?? "", try text(section, "content"), position])
             try writeAsides(section, owner: "section", id: sectionID)
         }
     }
@@ -204,9 +228,10 @@ final class ContentStore: @unchecked Sendable {
             if parent == nil && ["news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"].contains(slug) {
                 throw ContentError.invalid("Reserved page slug.")
             }
-            try execute("INSERT INTO pages (id, parent_id, title, menu_title, template_id, slug, content, date, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            try execute("INSERT INTO pages (id, parent_id, title, menu_title, template_id, slug, content, date, position, cover_media_id, cover_alt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         [id, parent, try text(page, "title", required: true), try text(page, "menuTitle", required: true),
-                         templateID, slug, try text(page, "content"), try text(page, "date", required: true), position])
+                         templateID, slug, try text(page, "content"), try text(page, "date", required: true), position,
+                         (page["coverMediaId"] as? String).flatMap { $0.isEmpty ? nil : $0 }, page["coverAlt"] as? String ?? ""])
             try writeRelated(page, owner: "page", id: id)
             try writePages(list(page, "children"), parent: id)
         }
@@ -226,9 +251,11 @@ final class ContentStore: @unchecked Sendable {
         }
         for news in try list(project, "news") {
             let id = try identity(news)
-            try execute("INSERT INTO news (id, title, slug, date, short_content) VALUES (?, ?, ?, ?, ?)",
+            try execute("INSERT INTO news (id, title, slug, date, short_content, content, cover_media_id, cover_alt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         [id, try text(news, "title", required: true), try text(news, "slug", required: true),
-                         try text(news, "date", required: true), try text(news, "shortContent")])
+                         try text(news, "date", required: true), try text(news, "shortContent"),
+                         try text(news, news["content"] == nil ? "shortContent" : "content"),
+                         (news["coverMediaId"] as? String).flatMap { $0.isEmpty ? nil : $0 }, news["coverAlt"] as? String ?? ""])
             try writeRelated(news, owner: "news", id: id)
         }
     }
@@ -245,7 +272,7 @@ final class ContentStore: @unchecked Sendable {
         var record = original
         let id = try text(record, "id", required: true)
         record["asides"] = try asides(owner: owner, id: id)
-        record["sections"] = try rows("SELECT id, heading, content FROM sections WHERE \(owner)_id = ? ORDER BY position", [id]).map { original in
+        record["sections"] = try rows("SELECT id, heading, subheading, content FROM sections WHERE \(owner)_id = ? ORDER BY position", [id]).map { original in
             var section = original
             section["asides"] = try asides(owner: "section", id: text(section, "id", required: true))
             return section
@@ -254,7 +281,7 @@ final class ContentStore: @unchecked Sendable {
     }
 
     private func pages(parent: String?) throws -> [[String: Any]] {
-        let sql = "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
+        let sql = "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
         return try rows(sql, parent.map { [$0] } ?? []).map { original in
             var page = try related(original, owner: "page")
             page["children"] = try pages(parent: text(page, "id", required: true))
@@ -268,7 +295,7 @@ final class ContentStore: @unchecked Sendable {
             let home = try rows("SELECT value FROM metadata WHERE key = ?", ["home_page_id"]).first?["value"] as? String
                 ?? records.first?["id"] as? String
             return ["version": 1, "homePageId": home.map { $0 as Any } ?? NSNull(), "pages": records,
-             "news": try rows("SELECT id, title, slug, date, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
+             "news": try rows("SELECT id, title, slug, date, content, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
              "media": try rows("SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id")]
         }
     }
@@ -322,7 +349,7 @@ final class ContentStore: @unchecked Sendable {
     }
 
     func importMedia(_ source: URL, kind: String, typeIdentifier: String, basename: String = "",
-                     width: Int? = nil, quality: Int? = nil) throws -> [String: Any] {
+                     width: Int? = nil, quality: Int? = nil, minimumWidth: Int? = nil) throws -> [String: Any] {
         try queue.sync {
             guard width == nil || (1...16384).contains(width!),
                   quality == nil || (1...100).contains(quality!),
@@ -330,6 +357,12 @@ final class ContentStore: @unchecked Sendable {
                 throw ContentError.invalid("Image width must be 1-16384 pixels and JPEG quality 1-100%.")
             }
             let id = UUID().uuidString
+            if let minimumWidth {
+                guard kind == "image", width == nil || width! >= minimumWidth else {
+                    throw ContentError.invalid("Cover width must be at least \(minimumWidth) pixels.")
+                }
+                try verifyMinimumWidth(source, minimum: minimumWidth)
+            }
             let requested = basename.trimmingCharacters(in: .whitespacesAndNewlines)
             guard requested.isEmpty || requested.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$", options: .regularExpression)
                 == (requested.startIndex..<requested.endIndex) else {
@@ -371,6 +404,7 @@ final class ContentStore: @unchecked Sendable {
                 try FileManager.default.copyItem(at: source, to: file)
             }
             do {
+                if let minimumWidth { try verifyMinimumWidth(file, minimum: minimumWidth) }
                 let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
                 guard size > 0 else { throw ContentError.invalid("The selected media file is empty.") }
                 try execute("INSERT INTO media (id, filename, mime_type, original_name, size) VALUES (?, ?, ?, ?, ?)",
@@ -378,6 +412,18 @@ final class ContentStore: @unchecked Sendable {
                 return ["id": id, "filename": file.lastPathComponent, "mimeType": mime,
                         "originalName": source.lastPathComponent, "size": size]
             } catch { try? FileManager.default.removeItem(at: file); throw error }
+        }
+    }
+
+    private func verifyMinimumWidth(_ file: URL, minimum: Int) throws {
+        guard let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            throw ContentError.invalid("Cannot read cover image dimensions.")
+        }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        let key = (5...8).contains(orientation) ? kCGImagePropertyPixelHeight : kCGImagePropertyPixelWidth
+        guard let width = properties[key] as? Int, width >= minimum else {
+            throw ContentError.invalid("Cover images must be at least \(minimum) pixels wide; smaller images are not enlarged.")
         }
     }
 

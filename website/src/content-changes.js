@@ -1,7 +1,7 @@
 const fields = {
-  Page: { title: "Title", menuTitle: "Menu title", templateId: "Layout", slug: "Slug", date: "Date", content: "Content" },
-  News: { title: "Title", slug: "Slug", date: "Date", shortContent: "Short content" },
-  Section: { heading: "Heading", content: "Content" },
+  Page: { title: "Title", menuTitle: "Menu title", templateId: "Layout", slug: "Slug", date: "Date", coverMediaId: "Cover image", coverAlt: "Cover alternative text", content: "Content" },
+  News: { title: "Title", slug: "Slug", date: "Date", coverMediaId: "Cover image", coverAlt: "Cover alternative text", shortContent: "Short content", content: "Long content" },
+  Section: { heading: "Heading", subheading: "Subheading", content: "Content" },
   Aside: { heading: "Heading", content: "Content" },
   Media: { filename: "Filename", mimeType: "Media type", originalName: "Original name", size: "Size in bytes" },
 };
@@ -28,8 +28,8 @@ export function projectChanges(before, after) {
       const title = `${parent ? `${parent} / ` : ""}${kind}: ${name(newItem ?? oldItem)}`;
       const summary = (kind === "Page" || kind === "News") && (!oldItem || !newItem);
       const changed = Object.entries(summary ? { title: "Title", date: "Date" } : fields[kind]).flatMap(([key, label]) => {
-        const previous = oldItem ? value(oldItem, key) : "";
-        const current = newItem ? value(newItem, key) : "";
+        const previous = oldItem ? (kind === "News" && key === "content" && oldItem.content === undefined ? value(oldItem, "shortContent") : value(oldItem, key)) : "";
+        const current = newItem ? (kind === "News" && key === "content" && newItem.content === undefined ? value(newItem, "shortContent") : value(newItem, key)) : "";
         return !summary && previous === current ? [] : [{ name: label, before: previous, after: current }];
       });
       if (changed.length || !oldItem || !newItem) {

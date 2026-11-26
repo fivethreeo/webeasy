@@ -1,7 +1,7 @@
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { escapeHtml, loadCatalog, render } from "./catalog.mjs";
+import { escapeHtml, loadCatalog, render, renderMaster, renderComponent } from "./catalog.mjs";
 import { loadProject } from "./content.mjs";
 import { renderSite } from "../src/content-model.js";
 
@@ -45,19 +45,22 @@ const cards = (entries) => entries.map((entry) =>
 
 for (const component of catalog.components) {
   component.preview = `components/${component.id}.html`;
-  const example = render(component.source, component.example, component.example.content);
+  const example = renderComponent(component);
   await writeFile(path.join(output, component.preview), document(component.title,
     `<header class="stack"><h1>${escapeHtml(component.title)}</h1><p>${escapeHtml(component.description)}</p></header>
     ${example}`));
 }
 for (const template of catalog.templates) {
   template.preview = `examples/${template.id}.html`;
+  const usedIds = new Set();
   const content = template.example.blocks.map((id) => {
     const component = catalog.components.find((item) => item.id === id);
-    return render(component.source, component.example, component.example.content);
+    return renderComponent(component, usedIds);
   }).join("\n");
   await writeFile(path.join(output, template.preview),
-    document(template.title, render(template.source, template.example, content)));
+    template.id === "master"
+      ? renderMaster(template.source, { ...template.example, baseHref: "../" }, content, "<nav>Example menu</nav>")
+      : document(template.title, render(template.source, template.example, content)));
 }
 await writeFile(path.join(output, "index.html"), document("Templates",
   `<header class="stack"><p class="eyebrow">Webeasy</p><h1>Small pages. Yours to publish.</h1><p>Explore every page template and the content blocks your app will insert.</p></header>

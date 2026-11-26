@@ -129,12 +129,12 @@ test("homepage choice persists, hides its submenu link and reflows at enlarged t
   }
 });
 
-async function openField(page, content = "<p>Hello from the phone</p>", nativeDetails = null) {
-  await page.addInitScript(({ photoSize, videoSize, content, project, nativeDetails }) => {
+async function openField(page, content = "<p>Hello from the phone</p>", nativeDetails = null, fieldOptions = {}) {
+  await page.addInitScript(({ photoSize, videoSize, content, project, nativeDetails, fieldOptions }) => {
     window.WebeasyNative = {
       request(serialized) {
         const { id, method, payload } = JSON.parse(serialized);
-        if (method === "ready") window.WebeasyField.setValue(content);
+        if (method === "ready") window.WebeasyField.setValue(content, fieldOptions);
         if (method === "change") window.__content = payload.content;
         if (method === "resize") window.__fieldHeight = payload.height;
         if (method === "pickMedia") window.__mediaRequest = payload;
@@ -147,11 +147,46 @@ async function openField(page, content = "<p>Hello from the phone</p>", nativeDe
         queueMicrotask(() => window.WebeasyBridge.receive({ id, result }));
       },
     };
-  }, { photoSize: photo.length, videoSize: clip.length, content, project, nativeDetails });
+  }, { photoSize: photo.length, videoSize: clip.length, content, project, nativeDetails, fieldOptions });
   await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
 }
+
+test("short news fields retain formatting but omit structural and media controls and clean pasted blocks", async ({ page }) => {
+  await openField(page, "<h2>Heading</h2><p><strong>Bold</strong> text</p>", null, { paragraphsOnly: true });
+  const field = page.locator(".rich-editor");
+  await expect(field.locator("h2")).toHaveCount(0);
+  await expect(field.locator("strong")).toHaveText("Bold");
+  for (const label of ["Phone image", "Phone video", "Bullets", "Numbers", "Quote", "Remove figure"]) {
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByRole("button", { name: "Bold", exact: true }).locator("svg")).toHaveCount(1);
+  await expect(page.getByLabel("Paragraph or heading")).toHaveCount(0);
+  await field.focus();
+  await field.evaluate((field) => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/html", '<h3>Pasted heading</h3><ul><li><em>List text</em></li></ul><img src="media/native-test.png">');
+    field.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+  });
+  await expect(field.locator("h3,ul,li,img,figure")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("Pasted heading");
+});
+
+test("simple image defaults reset to 400 pixels and 85 percent while advanced remains optional", async ({ page }) => {
+  await openField(page, "<p>Image defaults</p>", null, { simple: true });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.locator("#image-width")).toHaveValue("400");
+  await expect(page.locator("#image-quality")).toHaveValue("85");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.locator("#image-width")).toHaveValue("400");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.evaluate(() => window.WebeasyField.setValue("<p>Advanced defaults</p>", { simple: false }));
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(page.locator("#image-width")).toHaveValue("");
+  await expect(page.locator("#image-quality")).toHaveValue("");
+});
 
 test("native embed exposes only a rich-text field, reports edits/height, and formats text", async ({ page }) => {
   await openField(page);
@@ -226,6 +261,39 @@ test("optional image width and quality validate before picking and never carry i
   await page.getByLabel("JPEG quality (%, optional)").fill("0");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
+});
+
+test("common image presets default to None, allow custom values, and reset between images", async ({ page }) => {
+  await openField(page);
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  const widths = page.getByLabel("Common image widths");
+  const qualities = page.getByLabel("Common JPEG qualities");
+  await expect(widths).toHaveValue("");
+  await expect(qualities).toHaveValue("");
+  await widths.selectOption("1280");
+  await qualities.selectOption("85");
+  await expect(page.getByLabel("Maximum image width (pixels, optional)")).toHaveValue("1280");
+  await expect(page.getByLabel("JPEG quality (%, optional)")).toHaveValue("85");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "", width: 1280, quality: 85 });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await expect(widths).toHaveValue("");
+  await expect(qualities).toHaveValue("");
+  await widths.selectOption("1600");
+  await qualities.selectOption("90");
+  await widths.selectOption("");
+  await qualities.selectOption("");
+  await expect(page.getByLabel("Maximum image width (pixels, optional)")).toHaveValue("");
+  await expect(page.getByLabel("JPEG quality (%, optional)")).toHaveValue("");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "" });
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("Maximum image width (pixels, optional)").fill("1400");
+  await page.getByLabel("JPEG quality (%, optional)").fill("82");
+  await expect(widths).toHaveValue("custom");
+  await expect(qualities).toHaveValue("custom");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mediaRequest)).toEqual({ kind: "image", basename: "", width: 1400, quality: 82 });
 });
 
 test("native full-screen media details return optional optimization without opening an embedded dialog", async ({ page }) => {
@@ -462,6 +530,38 @@ test("SE-sized keyboard viewport keeps media actions reachable after scrolling l
   await page.getByLabel("Caption (optional)").fill("SE photo");
   await page.getByRole("button", { name: "Insert figure", exact: true }).click();
   await expect(field.locator("figure img")).toHaveAttribute("src", "media/native-test.png");
+});
+
+test("native generator loads server templates as a batch and exports their literal source", async ({ page }) => {
+  const [catalog, project] = await Promise.all([
+    page.request.get("/catalog.json").then((response) => response.json()),
+    page.request.get("/content.json").then((response) => response.json()),
+  ]);
+  await page.goto("/generator.html");
+  const result = await page.evaluate(({ catalog, project }) => {
+    const sources = JSON.parse(window.WebeasyGenerator.templates(JSON.stringify(catalog))).sources;
+    sources["webeasy_templates/templates/master.html"] = sources["webeasy_templates/templates/master.html"]
+      .replace("<body>", '<body data-remote-master="yes">');
+    const loaded = JSON.parse(window.WebeasyGenerator.loadTemplates(JSON.stringify({ catalog, sources, project })));
+    const compiled = JSON.parse(window.WebeasyGenerator.compile(JSON.stringify({ project, catalog: loaded.catalog })));
+    const preview = JSON.parse(window.WebeasyGenerator.previewTemplate(JSON.stringify({ catalog: loaded.catalog, id: "master" })));
+    delete sources["webeasy_templates/templates/page.html"];
+    const rejected = JSON.parse(window.WebeasyGenerator.loadTemplates(JSON.stringify({ catalog, sources, project })));
+    return {
+      error: loaded.error ?? null,
+      home: compiled.files.find((file) => file.path === "index.html").html,
+      source: compiled.files.find((file) => file.path === "webeasy_templates/templates/master.html").html,
+      preview: preview.files[0].html,
+      rejected: rejected.error,
+      original: catalog.templates.find((entry) => entry.id === "master").source,
+    };
+  }, { catalog, project });
+  expect(result.error).toBeNull();
+  expect(result.home).toContain('data-remote-master="yes"');
+  expect(result.source).toContain("{{{navigation}}}");
+  expect(result.preview).toContain('data-remote-master="yes"');
+  expect(result.rejected).toBeTruthy();
+  expect(result.original).not.toContain("data-remote-master");
 });
 
 test("native generation engine normalizes content and renders portable website files", async ({ page }) => {

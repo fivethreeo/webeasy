@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
     private var revision by mutableIntStateOf(0)
     private var status by mutableStateOf("Opening local SQLite project...")
     private var ready by mutableStateOf(false)
+    private var advancedUI by mutableStateOf(false)
     private var busy by mutableStateOf(false)
     private var tab by mutableIntStateOf(0)
     private val screens = mutableStateListOf<Screen>()
@@ -71,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private var pendingBack by mutableStateOf<Screen?>(null)
     private var pendingPublish by mutableStateOf(false)
     private var pendingHostKey by mutableStateOf<HostKeyApproval?>(null)
+    private var hostKeyForTemplates = false
     private val hosting by lazy { HostingCredentials(this) }
     private var hostingStatus by mutableStateOf("")
     private var hostingServer by mutableStateOf<String?>(null)
@@ -123,14 +126,15 @@ class MainActivity : ComponentActivity() {
 
     private data class Screen(val kind: String, val record: JSONObject? = null, val url: String? = null, val directory: File? = null,
                               val contentKey: String? = null)
-    private data class PendingMedia(val id: String, val kind: String, val view: WebView, val basename: String,
-                                    val width: Int?, val quality: Int?)
-    private data class PendingMediaDetails(val id: String, val kind: String, val view: WebView)
+    private data class PendingMedia(val id: String, val kind: String, val view: WebView?, val basename: String,
+                                    val width: Int?, val quality: Int?, val coverRecord: JSONObject? = null, val coverAlt: String = "")
+    private data class PendingMediaDetails(val id: String, val kind: String, val view: WebView?, val coverRecord: JSONObject? = null)
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val pending = pendingMedia ?: return@registerForActivityResult
         pendingMedia = null
-        if (uri == null) { respond(pending.view, pending.id); return@registerForActivityResult }
+        if (uri == null) { pending.view?.let { respond(it, pending.id) }; return@registerForActivityResult }
+        if (pending.coverRecord != null) busy = true
         worker.execute {
             runCatching {
                 val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
@@ -139,14 +143,21 @@ class MainActivity : ComponentActivity() {
                 val type = contentResolver.getType(uri) ?: URLConnection.guessContentTypeFromName(name) ?: ""
                 require(type.startsWith("${pending.kind}/"))
                 store.importMedia(contentResolver.openInputStream(uri) ?: error("Cannot read media."), type, name,
-                    pending.basename, pending.width, pending.quality)
+                    pending.basename, pending.width, pending.quality, if (pending.coverRecord != null) 1200 else null)
             }.fold(onSuccess = { media ->
                 runOnUiThread {
                     project?.getJSONArray("media")?.put(media)
-                    respond(pending.view, pending.id, media)
+                    pending.view?.let { respond(it, pending.id, media) }
+                    pending.coverRecord?.let {
+                        it.put("coverMediaId", media.getString("id")).put("coverAlt", pending.coverAlt)
+                        changed(); busy = false
+                    }
                 }
 
-            }, onFailure = { respond(pending.view, pending.id, error = it.message ?: "Cannot import media.") })
+            }, onFailure = { error ->
+                pending.view?.let { respond(it, pending.id, error = error.message ?: "Cannot import media.") }
+                if (pending.coverRecord != null) runOnUiThread { busy = false; status = error.message ?: "Cannot import cover." }
+            })
         }
     }
 
@@ -212,9 +223,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        advancedUI = getSharedPreferences("editor-ui", MODE_PRIVATE).getBoolean("advanced", false)
         savedInstanceState?.getString("hostingQRPhoto")?.takeIf {
             it.startsWith("hosting-qr-") && it.endsWith(".jpg") && File(it).name == it
         }?.let { pendingQRPhoto = File(File(cacheDir, "exports"), it) }
@@ -224,7 +236,16 @@ class MainActivity : ComponentActivity() {
         }
         worker.execute {
             runCatching {
-                Triple(store.project(), JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() }),
+                val examples = JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
+                store.templateSources()?.let { sources ->
+                    for (group in listOf("templates", "components")) {
+                        for (entry in examples.getJSONArray(group).records()) {
+                            val path = "webeasy_templates/$group/${entry.getString("id")}.html"
+                            if (sources.has(path)) entry.put("source", sources.getString(path))
+                        }
+                    }
+                }
+                Triple(store.project(), examples,
                     store.publishedSnapshot())
             }.fold(onSuccess = { (content, examples, published) -> runOnUiThread {
                 drafts.markSaved(drafts.capture(content))
@@ -243,43 +264,49 @@ class MainActivity : ComponentActivity() {
                 if (pendingPublish) AlertDialog(onDismissRequest = { pendingPublish = false },
                     title = { Text("Publish website?") },
                     text = { Text("Save and upload the website to your saved hosting destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.") },
-                    confirmButton = { TextButton(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text("Publish") } },
-                    dismissButton = { TextButton(onClick = { pendingPublish = false }) { Text("Cancel") } })
+                    confirmButton = { Button(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text("Publish") } },
+                    dismissButton = { OutlinedButton(onClick = { pendingPublish = false }) { Text("Cancel") } })
                 pendingHostKey?.let { key ->
                     AlertDialog(onDismissRequest = { pendingHostKey = null }, title = { Text("Trust SFTP server key?") },
                         text = { Text("${key.host}:${key.port}\n${key.fingerprint}\nCompare this fingerprint with your server before trusting it. No password has been sent.") },
-                        confirmButton = { TextButton(onClick = {
+                        confirmButton = { Button(onClick = {
                             runCatching {
                                 val connection = hosting.load() ?: error("Import hosting first.")
                                 check(connection.getString("host") == key.host && connection.getInt("port") == key.port)
                                 hosting.save(connection.put("_hostKeyFingerprint", key.fingerprint))
-                                pendingHostKey = null; generate(true, publish = true)
+                                pendingHostKey = null
+                                if (hostKeyForTemplates) loadServerTemplates() else generate(true, publish = true)
                             }.onFailure { status = "Cannot save the trusted server key." }
-                        }) { Text("Trust and publish") } },
-                        dismissButton = { TextButton(onClick = { pendingHostKey = null }) { Text("Cancel") } })
+                        }) { Text(if (hostKeyForTemplates) "Trust and load" else "Trust and publish") } },
+                        dismissButton = { OutlinedButton(onClick = { pendingHostKey = null }) { Text("Cancel") } })
                 }
                 pendingBack?.let { target ->
                     AlertDialog(onDismissRequest = { pendingBack = null }, title = { Text("Save changes?") },
                         text = { Text("Save changes before going back? Don't save discards changes to this item.") },
-                        confirmButton = { TextButton(onClick = {
+                        confirmButton = { Button(onClick = {
                             pendingBack = null
                             generate(false, afterSave = { if (screens.lastOrNull() === target) popScreen() })
                         }, enabled = ready && !busy) { Text("Save") } },
-                        dismissButton = { Row {
-                            TextButton(onClick = {
+                        dismissButton = { FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
                                 drafts.discard(target.record!!, project!!); changed(); status = "Changes discarded."
                                 pendingBack = null; popScreen()
                             }) { Text("Don't save") }
-                            TextButton(onClick = { pendingBack = null }) { Text("Cancel") }
+                            OutlinedButton(onClick = { pendingBack = null }) { Text("Cancel") }
                         } })
                 }
                 Box(Modifier.fillMaxSize()) {
                     Scaffold(topBar = {
-                        TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy") },
-                            navigationIcon = { if (screens.isNotEmpty()) TextButton(onClick = ::back) { Text(getString(R.string.back)) } },
+                        TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy",
+                            maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            navigationIcon = { if (screens.isNotEmpty()) OutlinedButton(onClick = ::back,
+                                contentPadding = PaddingValues(horizontal = 12.dp)) { Text(getString(R.string.back)) } },
                             actions = {
-                                TextButton(onClick = { generate(false) }, enabled = ready && !busy && project != null) { Text("Save") }
-                                TextButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null) { Text("Export") }
+                                Button(onClick = { generate(false) }, enabled = ready && !busy && project != null,
+                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Save") }
+                                Spacer(Modifier.width(8.dp))
+                                OutlinedButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null,
+                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Export") }
                             })
                     }) { padding ->
                         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -336,6 +363,14 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
+        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((advanced, name) in listOf(false to "Simple", true to "Advanced")) {
+                FilterChip(selected = advancedUI == advanced, enabled = !busy, onClick = {
+                    advancedUI = advanced
+                    getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putBoolean("advanced", advanced).apply()
+                }, label = { Text(name) })
+            }
+        }
         ScrollableTabRow(selectedTabIndex = tab) {
             listOf("Pages", "News", "Templates", "Changes", "Hosting").forEachIndexed { index, name ->
                 Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
@@ -364,7 +399,7 @@ class MainActivity : ComponentActivity() {
                 Button(onClick = ::photographQR, enabled = !busy) {
                     Text("Take a QR picture")
                 }
-                TextButton(onClick = {
+                OutlinedButton(onClick = {
                     worker.execute {
                         runCatching { hosting.remove() }.fold(
                             onSuccess = { runOnUiThread {
@@ -374,7 +409,7 @@ class MainActivity : ComponentActivity() {
                             onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
                     }
                 }, enabled = !busy && hostingServer != null) { Text("Forget hosting") }
-                OutlinedTextField(value = publicPathPrefix, onValueChange = { publicPathPrefix = it },
+                if (advancedUI) OutlinedTextField(value = publicPathPrefix, onValueChange = { publicPathPrefix = it },
                     label = { Text("Public URL prefix (optional)") }, singleLine = true, enabled = !busy && hostingServer != null,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth())
@@ -387,7 +422,7 @@ class MainActivity : ComponentActivity() {
                     Text("Save publishing settings")
                 }
                 if (publishingSettingsChanged()) Text("Save publishing settings before publishing.")
-                TextButton(onClick = { pendingPublish = true }, enabled = ready && !busy && hostingServer != null && !publishingSettingsChanged()) { Text("Publish website") }
+                Button(onClick = { pendingPublish = true }, enabled = ready && !busy && hostingServer != null && !publishingSettingsChanged()) { Text("Publish website") }
                 if (busy) CircularProgressIndicator()
                 Text("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }
@@ -401,7 +436,16 @@ class MainActivity : ComponentActivity() {
         val key = listOf("pages", "news", "templates")[tab]
         val records = source?.optJSONArray(key)?.records() ?: emptyList()
         LazyColumn {
-            if (tab == 1) item { TextButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
+            if (tab == 2 && advancedUI) item {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
+                        Text("Load templates from server")
+                    }
+                    Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+                    if (busy) CircularProgressIndicator()
+                }
+            }
+            if (tab == 1) item { OutlinedButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
             items(records.size, key = { records[it].getString("id") }) { index ->
                 val record = records[index]
                 if (tab < 2) RowEntry(record, source!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
@@ -410,7 +454,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.clickable { screens.add(Screen("template", record)) })
             }
             if (tab < 2 && source != null) item {
-                TextButton(onClick = {
+                FilledTonalButton(onClick = {
                     val kind = if (tab == 0) "page" else "news"
                     val collection = source.getJSONArray(key)
                     val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
@@ -422,11 +466,91 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun TemplateSource(record: JSONObject) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-            TextButton(onClick = {
-                screens.add(Screen("preview", url = "$base/assets/website/${record.getString("preview")}"))
-            }) { Text("Preview template") }
+            OutlinedButton(onClick = {
+                previewTemplate(record.getString("id"))
+            }, enabled = ready && !busy) { Text("Preview template") }
             SelectionContainer(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Text(record.getString("source"), fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+    private fun loadServerTemplates() {
+        if (!ready || busy || project == null || catalog == null) return
+        val destination = runCatching { hosting.load() }.getOrNull()
+        if (destination == null) { status = "Import your hosting setup QR first."; return }
+        busy = true
+        status = "Loading templates from server..."
+        val currentCatalog = catalog!!
+        generator.evaluateJavascript("window.WebeasyGenerator.templates(${JSONObject.quote(currentCatalog.toString())})") { serialized ->
+            val expected = runCatching {
+                val result = JSONObject(JSONTokener(serialized).nextValue() as String)
+                check(!result.has("error")) { result.getString("error") }
+                result.getJSONObject("sources").keys().asSequence().toList()
+            }
+            if (expected.isFailure) {
+                status = expected.exceptionOrNull()?.message ?: "Cannot list templates."; busy = false
+                return@evaluateJavascript
+            }
+            worker.execute {
+                runCatching { SitePublisher.loadTemplates(destination, expected.getOrThrow()) }.fold(
+                    onSuccess = { sources -> runOnUiThread {
+                        val input = JSONObject().put("catalog", currentCatalog).put("sources", sources).put("project", project)
+                        generator.evaluateJavascript("window.WebeasyGenerator.loadTemplates(${JSONObject.quote(input.toString())})") { response ->
+                            val updated = runCatching {
+                                val result = JSONObject(JSONTokener(response).nextValue() as String)
+                                check(!result.has("error")) { result.getString("error") }
+                                result.getJSONObject("catalog")
+                            }
+                            if (updated.isFailure) {
+                                status = "Templates not loaded: ${updated.exceptionOrNull()?.message} Local templates have not changed."
+                                busy = false
+                            } else worker.execute {
+                                runCatching { store.saveTemplateSources(sources) }.fold(
+                                    onSuccess = { runOnUiThread {
+                                        catalog = updated.getOrThrow(); busy = false
+                                        status = "Templates loaded and saved locally. Previews, exports and the next publish use them."
+                                    } },
+                                    onFailure = { runOnUiThread {
+                                        status = "Cannot save templates. Local templates have not changed."; busy = false
+                                    } })
+                            }
+                        }
+                    } },
+                    onFailure = { error -> runOnUiThread {
+                        busy = false
+                        if (error is HostKeyApproval) {
+                            hostKeyForTemplates = true; pendingHostKey = error
+                            status = "Confirm the SFTP server key before loading templates."
+                        } else status = error.message ?: "Cannot load templates."
+                    } })
+            }
+        }
+    }
+
+    private fun previewTemplate(id: String) {
+        if (!ready || busy || catalog == null) return
+        busy = true
+        val input = JSONObject().put("catalog", catalog).put("id", id).put("media", project?.optJSONArray("media"))
+        generator.evaluateJavascript("window.WebeasyGenerator.previewTemplate(${JSONObject.quote(input.toString())})") { serialized ->
+            val result = runCatching {
+                val output = JSONObject(JSONTokener(serialized).nextValue() as String)
+                check(!output.has("error")) { output.getString("error") }
+                output
+            }
+            if (result.isFailure) {
+                status = result.exceptionOrNull()?.message ?: "Cannot preview template."; busy = false
+                return@evaluateJavascript
+            }
+            worker.execute {
+                runCatching {
+                    val output = result.getOrThrow()
+                    store.prepareSite(output.getJSONArray("files"), output.getJSONArray("referencedMedia"))
+                }.fold(onSuccess = { directory -> runOnUiThread {
+                    busy = false
+                    screens.add(Screen("preview", url = "$base/preview/index.html", directory = directory))
+                } }, onFailure = { runOnUiThread {
+                    busy = false; status = it.message ?: "Cannot preview template."
+                } })
             }
         }
     }
@@ -515,15 +639,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalLayoutApi::class)
     @Composable
     private fun RowEntry(record: JSONObject, collection: JSONArray, index: Int, kind: String) {
         Column {
             ListItem(headlineContent = { Text(if (kind == "page") record.optString("menuTitle", "Page")
                 else record.optString("title").ifEmpty { record.optString("heading").ifEmpty { "Aside" } }) },
                 modifier = Modifier.clickable { screens.add(Screen(kind, record)) })
-            Row {
-                TextButton(onClick = { collection.remove(index); changed() }) { Text("Remove") }
-                TextButton(onClick = {
+            FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { collection.remove(index); changed() }) { Text("Remove") }
+                OutlinedButton(onClick = {
                     if (index > 0) {
                         val previous = collection.getJSONObject(index - 1)
                         collection.put(index - 1, record); collection.put(index, previous); changed()
@@ -547,28 +673,51 @@ class MainActivity : ComponentActivity() {
                     item { NativeText(record, "menuTitle", "Menu title") }
                     item {
                         val selected = record.optString("templateId", "page")
-                        TextButton(onClick = { layoutDialog = true }) {
+                        OutlinedButton(onClick = { layoutDialog = true }) {
                             Text("Page layout: ${layouts.find { it.getString("id") == selected }?.getString("title") ?: selected}")
                         }
                     }
                     item {
                         val current = project!!.optString("homePageId") == record.getString("id")
-                        TextButton(onClick = { project!!.put("homePageId", record.getString("id")); changed() }, enabled = !current) {
+                        OutlinedButton(onClick = { project!!.put("homePageId", record.getString("id")); changed() }, enabled = !current) {
                             Text(if (current) "Current homepage" else "Use as homepage")
                         }
                     }
                 }
                 item { NativeText(record, "slug", "Slug") }
-                item { TextButton(onClick = { dateDialog = true }) { Text("Date: ${record.getString("date")}") } }
+                item { OutlinedButton(onClick = { dateDialog = true }) { Text("Date: ${record.getString("date")}") } }
             } else item { NativeText(record, "heading", if (screen.kind == "aside") "Heading (optional)" else "Heading") }
+            if (screen.kind == "section") item { NativeText(record, "subheading", "Subheading (optional)") }
+            if (advancedUI && screen.kind in listOf("page", "news")) item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Cover image (optional)", style = MaterialTheme.typography.titleMedium)
+                    val coverId = record.optString("coverMediaId")
+                    val media = project?.getJSONArray("media")?.records()?.find { it.getString("id") == coverId }
+                    if (media != null) Text(media.getString("filename"))
+                    OutlinedButton(onClick = { pendingMediaDetails = PendingMediaDetails("cover", "image", null, record) }, enabled = !busy) {
+                        Text(if (coverId.isEmpty()) "Add cover image" else "Replace cover image")
+                    }
+                    if (coverId.isNotEmpty()) {
+                        NativeText(record, "coverAlt", "Cover alternative text")
+                        OutlinedButton(onClick = { record.put("coverMediaId", "").put("coverAlt", ""); changed() }, enabled = !busy) {
+                            Text("Remove cover image")
+                        }
+                    }
+                    Text("Covers must be at least 1200 pixels wide. Optional resizing and JPEG quality are available.")
+                }
+            }
             item {
                 Text(if (screen.kind == "news") "Short content" else "Content")
                 OutlinedButton(onClick = {
                     screens.add(Screen("content", record, contentKey = if (screen.kind == "news") "shortContent" else "content"))
                 }) { Text(if (screen.kind == "news") "Edit short content" else "Edit content") }
             }
+            if (screen.kind == "news") item {
+                Text("Long content")
+                OutlinedButton(onClick = { screens.add(Screen("content", record, contentKey = "content")) }) { Text("Edit long content") }
+            }
             val related = buildList {
-                if (screen.kind in listOf("page", "news")) add(Triple("sections", "Sections", "section"))
+                if (advancedUI && screen.kind in listOf("page", "news")) add(Triple("sections", "Sections", "section"))
                 if (screen.kind != "aside") add(Triple("asides", "Asides", "aside"))
                 if (screen.kind == "page") add(Triple("children", "Subpages", "page"))
             }
@@ -578,32 +727,33 @@ class MainActivity : ComponentActivity() {
                 items(collection.length(), key = { "$key-${collection.getJSONObject(it).getString("id")}" }) { index ->
                     RowEntry(collection.getJSONObject(index), collection, index, kind)
                 }
-                item { TextButton(onClick = {
+                item { FilledTonalButton(onClick = {
                     val child = create(kind, collection); collection.put(child); changed(); screens.add(Screen(kind, child))
                 }) { Text("Add ${if (key == "children") "subpage" else kind}") } }
             }
             if (screen.kind in listOf("page", "news")) item {
-                TextButton(onClick = { generate(true, path = if (screen.kind == "news")
+                OutlinedButton(onClick = { generate(true, path = if (screen.kind == "news")
                     "news/${record.getString("date")}/${record.getString("slug")}/index.html" else pagePath(record.getString("id"))) }) { Text("Preview") }
             }
         }
         if (layoutDialog) {
             AlertDialog(onDismissRequest = { layoutDialog = false }, title = { Text("Page layout") },
-                text = { Column { layouts.forEach { layout ->
-                    TextButton(onClick = { record.put("templateId", layout.getString("id")); changed(); layoutDialog = false }) {
+                text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { layouts.forEach { layout ->
+                    OutlinedButton(onClick = { record.put("templateId", layout.getString("id")); changed(); layoutDialog = false },
+                        modifier = Modifier.fillMaxWidth()) {
                         Text(layout.getString("title"))
                     }
                 } } },
-                confirmButton = { TextButton(onClick = { layoutDialog = false }) { Text("Cancel") } })
+                confirmButton = { OutlinedButton(onClick = { layoutDialog = false }) { Text("Cancel") } })
         }
         if (dateDialog) {
             val dateState = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(record.getString("date")).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
             DatePickerDialog(onDismissRequest = { dateDialog = false },
-                confirmButton = { TextButton(onClick = {
+                confirmButton = { Button(onClick = {
                     dateState.selectedDateMillis?.let { record.put("date", Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()); changed() }
                     dateDialog = false
                 }) { Text("Select") } },
-                dismissButton = { TextButton(onClick = { dateDialog = false }) { Text("Cancel") } }) { DatePicker(state = dateState) }
+                dismissButton = { OutlinedButton(onClick = { dateDialog = false }) { Text("Cancel") } }) { DatePicker(state = dateState) }
         }
     }
 
@@ -679,7 +829,7 @@ class MainActivity : ComponentActivity() {
                     } else if (file != null) screens.add(Screen("preview", url = "$base/preview/${path ?: "index.html"}", directory = file))
                 } }, onFailure = { runOnUiThread {
                     busy = false
-                    if (it is HostKeyApproval) { pendingHostKey = it; status = "Confirm the SFTP server key before publishing." }
+                    if (it is HostKeyApproval) { hostKeyForTemplates = false; pendingHostKey = it; status = "Confirm the SFTP server key before publishing." }
                     else status = it.message ?: "The operation failed."
                 } })
             }
@@ -704,7 +854,11 @@ class MainActivity : ComponentActivity() {
     private inner class FieldBridge(val view: WebView, val record: JSONObject, val key: String) {
         var ready = false
         var value = ""
-        fun pushValue(content: String) { value = content; view.evaluateJavascript("window.WebeasyField.setValue(${JSONObject.quote(content)});", null) }
+        fun pushValue(content: String) {
+            value = content
+            val options = JSONObject().put("paragraphsOnly", key == "shortContent").put("simple", !advancedUI)
+            view.evaluateJavascript("window.WebeasyField.setValue(${JSONObject.quote(content)}, $options);", null)
+        }
         @JavascriptInterface fun request(serialized: String) {
             val message = runCatching { JSONObject(serialized) }.getOrNull() ?: return
             runOnUiThread {
@@ -718,13 +872,13 @@ class MainActivity : ComponentActivity() {
                         .put("homePageId", project?.opt("homePageId") ?: JSONObject.NULL))
                     "mediaDetails" -> {
                         val kind = payload.optString("kind")
-                        if (pendingMediaDetails != null || kind !in listOf("image", "video"))
+                        if (key == "shortContent" || pendingMediaDetails != null || kind !in listOf("image", "video"))
                             respond(view, id, error = "Cannot open media details.")
                         else pendingMediaDetails = PendingMediaDetails(id, kind, view)
                     }
                     "pickMedia" -> {
                         val kind = payload.optString("kind")
-                        if (pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
+                        if (key == "shortContent" || pendingMedia != null || kind !in listOf("image", "video")) respond(view, id, error = "Cannot open media picker.")
                         else {
                             pendingMedia = PendingMedia(id, kind, view, payload.optString("basename"),
                                 if (payload.has("width")) payload.optInt("width") else null,
@@ -744,19 +898,27 @@ class MainActivity : ComponentActivity() {
         var basename by remember { mutableStateOf("") }
         var alt by remember { mutableStateOf("") }
         var caption by remember { mutableStateOf("") }
-        var width by remember { mutableStateOf("") }
-        var quality by remember { mutableStateOf("") }
+        var width by remember { mutableStateOf(if (!advancedUI && pending.kind == "image" && pending.coverRecord == null) "400" else "") }
+        var quality by remember { mutableStateOf(if (!advancedUI && pending.kind == "image" && pending.coverRecord == null) "85" else "") }
         var error by remember { mutableStateOf("") }
         fun finish(result: JSONObject? = null) {
             pendingMediaDetails = null
-            respond(pending.view, pending.id, result ?: JSONObject.NULL)
+            pending.view?.let { respond(it, pending.id, result ?: JSONObject.NULL) }
+            if (pending.coverRecord != null && result != null) {
+                val options = result.getJSONObject("imageOptions")
+                pendingMedia = PendingMedia("cover", "image", null, result.getString("basename"),
+                    if (options.has("width")) options.getInt("width") else null,
+                    if (options.has("quality")) options.getInt("quality") else null, pending.coverRecord, result.getString("alt"))
+                mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }
         }
         BackHandler { finish() }
         Surface(Modifier.fillMaxSize()) {
             Scaffold(topBar = {
-                TopAppBar(title = { Text(if (pending.kind == "image") "Image details" else "Video details") },
-                    navigationIcon = { TextButton(onClick = { finish() }) { Text("Cancel") } },
-                    actions = { TextButton(onClick = {
+                TopAppBar(title = { Text(if (pending.coverRecord != null) "Cover image" else if (pending.kind == "image") "Image details" else "Video details",
+                    maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = { OutlinedButton(onClick = { finish() }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Cancel") } },
+                    actions = { Button(contentPadding = PaddingValues(horizontal = 12.dp), onClick = {
                         val name = basename.trim()
                         if (name.isNotEmpty() && !name.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,79}"))) {
                             error = "Use up to 80 letters, numbers, hyphens, or underscores for the basename, without an extension."
@@ -766,6 +928,8 @@ class MainActivity : ComponentActivity() {
                             if (pending.kind == "image" && values.any { (_, value, limit) ->
                                 value.isNotBlank() && (value.trim().toIntOrNull()?.let { it in 1..limit } != true)
                             }) error = "Image width must be 1-16384 pixels and JPEG quality 1-100%."
+                            else if (pending.coverRecord != null && width.isNotBlank() && width.trim().toInt() < 1200)
+                                error = "Cover width must be at least 1200 pixels."
                             else {
                                 if (pending.kind == "image") values.forEach { (key, value, _) ->
                                     if (value.isNotBlank()) options.put(key, value.trim().toInt())
@@ -782,16 +946,37 @@ class MainActivity : ComponentActivity() {
                     if (pending.kind == "image") {
                         OutlinedTextField(alt, { alt = it }, Modifier.fillMaxWidth(), label = { Text("Alternative text") })
                     }
-                    OutlinedTextField(caption, { caption = it }, Modifier.fillMaxWidth(), label = { Text("Caption (optional)") })
+                    if (pending.coverRecord == null) OutlinedTextField(caption, { caption = it }, Modifier.fillMaxWidth(), label = { Text("Caption (optional)") })
                     if (pending.kind == "image") {
                         Text("Image optimization (optional)", style = MaterialTheme.typography.titleMedium)
+                        ImagePreset("Common image widths", width, listOf("320", "400", "640", "960", "1280", "1600", "1920", "2560")
+                            .filter { pending.coverRecord == null || it.toInt() >= 1200 }, " px") { width = it }
                         OutlinedTextField(width, { width = it }, Modifier.fillMaxWidth(), label = { Text("Maximum width (pixels, optional)") },
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        ImagePreset("Common JPEG qualities", quality, listOf("60", "70", "75", "80", "85", "90", "95", "100"), "%") { quality = it }
                         OutlinedTextField(quality, { quality = it }, Modifier.fillMaxWidth(), label = { Text("JPEG quality (%, optional)") },
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                         Text("Leave both blank for normal import. Width preserves proportions and never enlarges images. Resized JPEG uses 85% quality unless specified. PNG remains lossless and keeps transparency. Animated images must be imported unchanged.")
                     } else Text("MP4 is recommended for videos.")
                     if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun ImagePreset(label: String, value: String, choices: List<String>, unit: String, onChange: (String) -> Unit) {
+        var expanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(value = if (value.isEmpty()) "None" else value + unit,
+                onValueChange = {}, readOnly = true, label = { Text(label) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth())
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(text = { Text("None") }, onClick = { onChange(""); expanded = false })
+                choices.forEach { choice ->
+                    DropdownMenuItem(text = { Text(choice + unit) }, onClick = { onChange(choice); expanded = false })
                 }
             }
         }

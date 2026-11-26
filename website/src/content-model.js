@@ -1,4 +1,4 @@
-import { escapeHtml, render } from "./render.js";
+import { escapeHtml, render, renderMaster, renderSection } from "./render.js";
 import { localMediaPath, safeLinkHref } from "./rich-text.js";
 import { normalizePublishingSettings } from "./publishing-settings.js";
 
@@ -9,7 +9,7 @@ export function newId() {
     `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function normalizeProject(input, sanitize) {
+export function normalizeProject(input, sanitize, sanitizeShort = sanitize) {
   if (input?.version !== 1 || !Array.isArray(input.pages) || !Array.isArray(input.news)) {
     throw new Error("Unsupported content project.");
   }
@@ -50,8 +50,14 @@ export function normalizeProject(input, sanitize) {
   }));
   const sections = (record) => list(record, "sections").map((section) => ({
     id: identity(section), heading: text(section, "heading", true),
+    subheading: section.subheading === undefined ? "" : text(section, "subheading"),
     content: sanitize(text(section, "content")), asides: asides(section),
   }));
+  const coverFields = (record) => {
+    const coverMediaId = record.coverMediaId === undefined ? "" : text(record, "coverMediaId");
+    if (coverMediaId && !/^[a-zA-Z0-9_-]+$/.test(coverMediaId)) throw new Error("Invalid cover image ID.");
+    return { coverMediaId, coverAlt: record.coverAlt === undefined ? "" : text(record, "coverAlt") };
+  };
   const pages = (records, root = false) => {
     const slugs = new Set();
     return records.map((page) => {
@@ -63,6 +69,7 @@ export function normalizeProject(input, sanitize) {
       return {
         id: identity(page), title: text(page, "title", true), menuTitle: text(page, "menuTitle", true),
         templateId, slug: pageSlug, content: sanitize(text(page, "content")), date: date(page),
+        ...coverFields(page),
         sections: sections(page), asides: asides(page), children: pages(list(page, "children")),
       };
     });
@@ -75,7 +82,9 @@ export function normalizeProject(input, sanitize) {
     newsRoutes.add(route);
     return {
       id: identity(item), title: text(item, "title", true), slug: itemSlug, date: itemDate,
-      shortContent: sanitize(text(item, "shortContent")), sections: sections(item), asides: asides(item),
+      content: sanitize(item.content === undefined ? text(item, "shortContent") : text(item, "content")),
+      shortContent: sanitizeShort(text(item, "shortContent")), sections: sections(item), asides: asides(item),
+      ...coverFields(item),
     };
   });
   const media = list(input, "media").map((item) => {
@@ -90,6 +99,7 @@ export function normalizeProject(input, sanitize) {
     };
   });
   if (new Set(media.map((item) => item.filename)).size !== media.length) throw new Error("Duplicate media filename.");
+  for (const record of [...pageRoutes(normalizedPages).map((entry) => entry.record), ...news]) coverMedia(record, media);
   const homePageId = input.homePageId ?? normalizedPages[0]?.id ?? null;
   if (homePageId !== null && !pageRoutes(normalizedPages).some((entry) => entry.record.id === homePageId)) {
     throw new Error("Choose an existing page for the homepage.");
@@ -123,12 +133,27 @@ function withAsides(content, asides, catalog) {
   </div>`;
 }
 
-function body(record, catalog) {
+function coverMedia(record, media = []) {
+  if (!record.coverMediaId) return null;
+  const image = media.find((item) => item.id === record.coverMediaId);
+  if (!image || !image.mimeType.startsWith("image/") || !/\.(jpg|jpeg|png|gif|webp)$/.test(image.filename)) {
+    throw new Error("Choose an existing managed image for the cover.");
+  }
+  return image;
+}
+
+function coverMarkup(record, media) {
+  const image = coverMedia(record, media);
+  return image ? rich(`<figure class="stack cover-image"><img src="media/${escapeHtml(image.filename)}" alt="${escapeHtml(record.coverAlt ?? "")}"></figure>`) : "";
+}
+
+function body(record, catalog, media) {
   const source = catalog.components.find((item) => item.id === "section")?.source;
   if (record.sections.length && !source) throw new Error("The section component is missing.");
-  const sections = record.sections.map((section) => render(source, { heading: section.heading },
-    withAsides(rich(section.content), section.asides, catalog))).join("\n");
-  return withAsides(`${rich(record.content ?? record.shortContent)}${sections}`, record.asides, catalog);
+  const usedIds = new Set();
+  const sections = record.sections.map((section) => renderSection(source, section,
+    withAsides(rich(section.content), section.asides, catalog), usedIds)).join("\n");
+  return coverMarkup(record, media) + withAsides(`${rich(record.content ?? record.shortContent)}${sections}`, record.asides, catalog);
 }
 
 function menu(pages, activeId, currentId, homeId) {
@@ -173,7 +198,7 @@ export function renderSite(project, catalog, options = {}) {
   const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
   const home = homeEntry?.record;
   const pageContent = (entry) => {
-    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog));
+    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog, project.media));
     const aside = subpageNavigation(entry, home?.id);
     return aside ? `<div class="with-sidebar with-sidebar:right"><div class="stack content-main">${article}</div>${aside}</div>` : article;
   };
@@ -187,13 +212,7 @@ export function renderSite(project, catalog, options = {}) {
     <a class="site-logo" href="${escapeHtml(homeHref)}" aria-label="Home"${currentId === home?.id && home ? ' aria-current="page"' : ""}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
     <nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId, home?.id)}
     <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav></header>`;
-    return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title><base href="${prefix}">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; media-src 'self'; base-uri 'self'; object-src 'none'">
-<link rel="stylesheet" href="assets/site.css"><script defer src="assets/site.js"></script>
-</head><body><main class="center stack site-shell published-shell">${navigation}${content}</main></body></html>`;
+    return renderMaster(template("master"), { title, baseHref: prefix }, content, navigation);
   };
   for (const page of pages) {
     const file = `${href(page.route)}index.html`;
@@ -208,11 +227,11 @@ export function renderSite(project, catalog, options = {}) {
   for (const item of news) {
     const file = `news/${item.date}/${item.slug}/index.html`;
     files.push({ path: file, html: document(item.title,
-      render(template("news"), item, body(item, catalog)), file) });
+      render(template("news"), item, body(item, catalog, project.media)), file) });
   }
   const articles = news.slice(0, 3).map((item) => `<article class="stack news-summary">
     <header class="stack"><h2><a href="news/${item.date}/${item.slug}/">${escapeHtml(item.title)}</a></h2>
-    <time datetime="${item.date}">${item.date}</time></header>${rich(item.shortContent)}</article>`).join("\n");
+    <time datetime="${item.date}">${item.date}</time></header>${coverMarkup(item, project.media)}${rich(item.shortContent)}</article>`).join("\n");
   const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
   files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
   const homepage = homeEntry ? pageContent(homeEntry) : listing;
@@ -225,6 +244,8 @@ export function referencedMedia(project, window) {
   const visit = (record) => {
     if (Array.isArray(record)) { record.forEach(visit); return; }
     if (!record || typeof record !== "object") return;
+    const cover = coverMedia(record, project.media);
+    if (cover) paths.add(`media/${cover.filename}`);
     for (const [key, value] of Object.entries(record)) {
       if (["content", "shortContent"].includes(key) && typeof value === "string") {
         const template = window.document.createElement("template");

@@ -29,11 +29,12 @@ test("new templates are discovered from the catalog and invalid entries fail ear
   try {
     await cp(source, directory, { recursive: true });
     const catalog = JSON.parse(await readFile(path.join(directory, "catalog.json"), "utf8"));
-    catalog.templates.push({ ...catalog.templates[0], id: "new-page", file: "templates/new-page.html" });
+    const page = catalog.templates.find((entry) => entry.id === "page");
+    catalog.templates.push({ ...page, id: "new-page", file: "templates/new-page.html" });
     await cp(path.join(directory, "templates/page.html"), path.join(directory, "templates/new-page.html"));
     await writeFile(path.join(directory, "catalog.json"), JSON.stringify(catalog));
     assert.equal((await loadCatalog(directory)).templates.at(-1).id, "new-page");
-    catalog.templates.at(-1).example = { ...catalog.templates[0].example, blocks: ["missing"] };
+    catalog.templates.at(-1).example = { ...page.example, blocks: ["missing"] };
     await writeFile(path.join(directory, "catalog.json"), JSON.stringify(catalog));
     await assert.rejects(loadCatalog(directory), /Unknown component/);
     catalog.templates.at(-1).file = "../../outside.html";

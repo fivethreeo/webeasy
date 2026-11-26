@@ -86,6 +86,19 @@ class ContentStoreTest {
     }
 
     @Test
+    fun downloadedTemplatesPersistAcrossContentSavesAndAppReopening() {
+        assertNull(store.templateSources())
+        val sources = JSONObject().put("webeasy_templates/templates/master.html", "<html>Edited{{{content}}}</html>")
+        store.saveTemplateSources(sources)
+        val project = store.project()
+        project.getJSONArray("pages").getJSONObject(0).put("title", "Content changed")
+        store.save(project)
+        store.close(); store = ContentStore(context)
+        assertEquals(sources.toString(), store.templateSources().toString())
+        assertEquals("Content changed", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+    }
+
+    @Test
     fun importedMediaAndFigureContentSurviveReopeningAndExportExcludesTheDatabase() {
         val bytes = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
         val media = store.importMedia(ByteArrayInputStream(bytes), "image/png", "Phone photo.png")
@@ -154,8 +167,8 @@ class ContentStoreTest {
         }
     }
 
-    private fun imageBytes(format: Bitmap.CompressFormat): ByteArray {
-        val image = Bitmap.createBitmap(160, 80, Bitmap.Config.ARGB_8888)
+    private fun imageBytes(format: Bitmap.CompressFormat, width: Int = 160, height: Int = 80): ByteArray {
+        val image = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         try {
             for (y in 0 until image.height) for (x in 0 until image.width) {
                 image.setPixel(x, y, Color.argb(96, x * 37 % 256, y * 19 % 256, x * y * 7 % 256))
@@ -185,6 +198,58 @@ class ContentStoreTest {
             assertTrue(lowFile.length() < highFile.length())
             assertEquals(highFile.length(), high.getLong("size"))
         } finally { image.recycle() }
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun coversRejectUndersizedImagesAndPersistAlongsideIndependentNewsText() {
+        val small = imageBytes(Bitmap.CompressFormat.JPEG)
+        assertThrows(IllegalArgumentException::class.java) {
+            store.importMedia(ByteArrayInputStream(small), "image/jpeg", "Small.jpg", minimumWidth = 1200)
+        }
+        val bytes = imageBytes(Bitmap.CompressFormat.JPEG, 1400, 700)
+        assertThrows(IllegalArgumentException::class.java) {
+            store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Small output.jpg", width = 400, quality = 85, minimumWidth = 1200)
+        }
+        assertEquals(0, store.project().getJSONArray("media").length())
+        assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        val cover = store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Cover.jpg", width = 1200, quality = 85, minimumWidth = 1200)
+        val project = store.project()
+        val news = project.getJSONArray("news").getJSONObject(0)
+        news.put("shortContent", "<p>Summary</p>").put("content", "<h2>Full story</h2><p>Details</p>")
+            .put("coverMediaId", cover.getString("id")).put("coverAlt", "Coast")
+        store.save(project)
+        store.close(); store = ContentStore(context)
+        val loaded = store.project().getJSONArray("news").getJSONObject(0)
+        assertEquals("<p>Summary</p>", loaded.getString("shortContent"))
+        assertEquals("<h2>Full story</h2><p>Details</p>", loaded.getString("content"))
+        assertEquals(cover.getString("id"), loaded.getString("coverMediaId"))
+        assertEquals("Coast", loaded.getString("coverAlt"))
+        val image = BitmapFactory.decodeFile(java.io.File(store.mediaDirectory, cover.getString("filename")).path)
+        try { assertEquals(1200, image.width); assertEquals(600, image.height) } finally { image.recycle() }
+        loaded.put("coverMediaId", "").put("coverAlt", "")
+        store.save(store.project().also { it.getJSONArray("news").put(0, loaded) })
+        assertEquals("", store.project().getJSONArray("news").getJSONObject(0).getString("coverMediaId"))
+        assertEquals(1, store.project().getJSONArray("media").length())
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun coverMinimumWidthUsesUprightExifDimensions() {
+        val source = java.io.File.createTempFile("cover-orientation", ".jpg", context.cacheDir)
+        try {
+            source.writeBytes(imageBytes(Bitmap.CompressFormat.JPEG, 1400, 700))
+            androidx.exifinterface.media.ExifInterface(source.absolutePath).apply {
+                setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90.toString())
+                saveAttributes()
+            }
+            assertThrows(IllegalArgumentException::class.java) {
+                store.importMedia(source.inputStream(), "image/jpeg", "Rotated cover.jpg", minimumWidth = 1200)
+            }
+            assertEquals(0, store.project().getJSONArray("media").length())
+            assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        } finally { source.delete() }
     }
 
     @Test
@@ -250,6 +315,10 @@ class ContentStoreTest {
         val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
         val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
             .replace("    template_id TEXT NOT NULL DEFAULT 'page',\n", "")
+            .replace("    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,\n", "")
+            .replace("    cover_alt TEXT NOT NULL DEFAULT '',\n", "")
+            .replace("    subheading TEXT NOT NULL DEFAULT '',\n", "")
+            .replace("    content TEXT NOT NULL DEFAULT '',\n", "")
         schema.split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
         old.execSQL("INSERT INTO metadata (key, value) VALUES ('seeded', '1')")
         old.execSQL("INSERT INTO pages (id, title, menu_title, slug, content, date, position) VALUES ('legacy', 'Old page', 'Old page', 'legacy', '<p>Keep me</p>', '2026-11-01', 0)")
@@ -268,7 +337,7 @@ class ContentStoreTest {
         store.close()
         store = ContentStore(context)
         assertEquals("reading-page", store.project().getJSONArray("pages").getJSONObject(0).getString("templateId"))
-        assertEquals(2, store.readableDatabase.version)
+        assertEquals(4, store.readableDatabase.version)
     }
 
     @Test
@@ -286,6 +355,36 @@ class ContentStoreTest {
         first.put("children", JSONArray()); project.put("homePageId", first.getString("id"))
         store.save(project)
         assertEquals(first.getString("id"), store.project().getString("homePageId"))
+    }
+
+    @Test
+    fun versionTwoMigrationPreservesContentAndAddsEmptyOptionalFields() {
+        store.close()
+        context.deleteDatabase("webeasy.sqlite")
+        val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
+        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+            .replace("    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,\n", "")
+            .replace("    cover_alt TEXT NOT NULL DEFAULT '',\n", "")
+            .replace("    subheading TEXT NOT NULL DEFAULT '',\n", "")
+            .replace("    content TEXT NOT NULL DEFAULT '',\n", "")
+        schema.split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
+        old.execSQL("INSERT INTO metadata (key, value) VALUES ('seeded', '1')")
+        old.execSQL("INSERT INTO pages (id, title, menu_title, template_id, slug, content, date, position) VALUES ('legacy', 'Old page', 'Menu', 'reading-page', 'legacy', '<p>Keep me</p>', '2026-11-01', 0)")
+        old.execSQL("INSERT INTO sections (id, page_id, heading, content, position) VALUES ('legacy-section', 'legacy', 'Heading', '<p>Section</p>', 0)")
+        old.version = 2
+        old.close()
+        store = ContentStore(context)
+        val page = store.project().getJSONArray("pages").getJSONObject(0)
+        assertEquals("reading-page", page.getString("templateId"))
+        assertEquals("<p>Keep me</p>", page.getString("content"))
+        assertEquals("", page.getString("coverMediaId"))
+        val section = page.getJSONArray("sections").getJSONObject(0)
+        assertEquals("", section.getString("subheading"))
+        section.put("subheading", "An introduction")
+        store.save(store.project().also { it.getJSONArray("pages").put(0, page) })
+        store.close(); store = ContentStore(context)
+        assertEquals("An introduction", store.project().getJSONArray("pages").getJSONObject(0)
+            .getJSONArray("sections").getJSONObject(0).getString("subheading"))
     }
 
     @Test
@@ -309,6 +408,26 @@ class ContentStoreTest {
         assertEquals("Unrelated draft", news.getString("title"))
         assertFalse(drafts.hasChanges(page, project))
         assertTrue(drafts.hasChanges(news, project))
+    }
+
+    @Test
+    fun versionThreeMigrationRetainsLegacyShortMarkupInTheNewLongField() {
+        store.close()
+        context.deleteDatabase("webeasy.sqlite")
+        val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
+        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+            .replace("    content TEXT NOT NULL DEFAULT '',\n", "")
+        schema.split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
+        old.execSQL("INSERT INTO metadata (key, value) VALUES ('seeded', '1')")
+        val rich = "<h2>Existing heading</h2><figure><img src=\"media/old.jpg\"></figure>"
+        old.execSQL("INSERT INTO news (id,title,slug,date,short_content) VALUES ('legacy-news','Old story','old','2026-11-01',?)", arrayOf(rich))
+        old.version = 3
+        old.close()
+        store = ContentStore(context)
+        val news = store.project().getJSONArray("news").getJSONObject(0)
+        assertEquals(rich, news.getString("content"))
+        assertEquals(rich, news.getString("shortContent"))
+        assertEquals(4, store.readableDatabase.version)
     }
 
     @Test

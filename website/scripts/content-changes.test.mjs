@@ -10,7 +10,7 @@ test("native placeholder fields and serialization order do not appear as changes
   const current = fresh();
   current.pages[0].templateId ??= "page";
   current.news[0].children = [];
-  current.news[0].content = "<p></p>";
+  current.news[0].content = current.news[0].shortContent;
   current.news[0].menuTitle = "New page";
   assert.deepEqual(projectChanges(seed, current), []);
 });

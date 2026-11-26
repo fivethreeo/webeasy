@@ -106,3 +106,15 @@ dialog::backdrop {
 [hidden] {
   display: none !important;
 }
+
+.editor-icon {
+  inline-size: 1.25em;
+  block-size: 1.25em;
+  fill: currentColor;
+  vertical-align: middle;
+}
+
+.icon-button {
+  min-inline-size: 2.2rem;
+  min-block-size: 2.2rem;
+}

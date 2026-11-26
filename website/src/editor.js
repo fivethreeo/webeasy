@@ -1,8 +1,10 @@
 import "./editor.css";
 import { createRichTextSanitizer, safeLinkHref } from "./rich-text.js";
 import { newId, normalizeProject, pageRoutes, sortedNews, renderSite, referencedMedia } from "./content-model.js";
+import { editorIcon } from "./editor-icons.js";
 
 const sanitize = createRichTextSanitizer(window);
+const sanitizeShort = createRichTextSanitizer(window, true);
 const $ = (id) => document.getElementById(id);
 const native = Boolean(window.WebeasyNative?.request || window.webkit?.messageHandlers?.webeasy);
 const requests = new Map();
@@ -83,15 +85,24 @@ function restoreSelection(field, savedRange = selectionRange) {
   selection.addRange(range);
   return range;
 }
-export function figureDetails(kind) {
+export function figureDetails(kind, options = {}) {
   const dialog = $("media-details");
   $("media-basename").value = "";
   $("media-alt").value = "";
   $("media-alt").parentElement.hidden = kind !== "image";
   $("image-settings").hidden = kind !== "image";
-  for (const id of ["image-width", "image-quality"]) {
-    $(id).value = "";
-    $(id).disabled = kind !== "image";
+  for (const key of ["width", "quality"]) {
+    const field = $(`image-${key}`), preset = $(`image-${key}-preset`);
+    field.value = kind === "image" && options.simple ? (key === "width" ? "400" : "85") : "";
+    preset.value = [...preset.options].some((option) => option.value === field.value) ? field.value : "custom";
+    field.disabled = preset.disabled = kind !== "image";
+    preset.onchange = () => {
+      if (preset.value === "custom") field.focus();
+      else field.value = preset.value;
+    };
+    field.oninput = () => {
+      preset.value = [...preset.options].some((option) => option.value === field.value) ? field.value : "custom";
+    };
   }
   $("media-caption").value = "";
   dialog.returnValue = "";
@@ -172,6 +183,8 @@ function linkDetails(project, selectedText, current) {
   });
 }
 export function richEditor(record, key, labelText, options = {}) {
+  const short = options.paragraphsOnly === true || key === "shortContent";
+  const sanitizeContent = short ? sanitizeShort : sanitize;
   const contentProject = options.project ?? project;
   const onChange = options.onChange ?? changed;
   const wrapper = element("div", "stack");
@@ -185,7 +198,7 @@ export function richEditor(record, key, labelText, options = {}) {
   field.setAttribute("role", "textbox");
   field.setAttribute("aria-multiline", "true");
   field.setAttribute("aria-labelledby", label.id);
-  field.innerHTML = sanitize(record[key]);
+  field.innerHTML = sanitizeContent(record[key]);
   let activeFigure = null;
   const selectFigure = (figure) => {
     activeFigure?.removeAttribute("data-editor-selected");
@@ -241,7 +254,7 @@ export function richEditor(record, key, labelText, options = {}) {
     if (replacements.size && anchor && focus) selection.setBaseAndExtent(replacements.get(anchor) ?? anchor, anchorOffset,
       replacements.get(focus) ?? focus, focusOffset);
   };
-  const update = () => { record[key] = sanitize(field.innerHTML); onChange(record[key]); };
+  const update = () => { record[key] = sanitizeContent(field.innerHTML); onChange(record[key]); };
   const format = (command, value, emphasis = false) => {
     restoreSelection(field);
     document.execCommand("styleWithCSS", false, false);
@@ -262,9 +275,11 @@ export function richEditor(record, key, labelText, options = {}) {
     ["Emphasis", "Em", "italic"], ["Bullets", "Bullets", "insertUnorderedList"],
     ["Numbers", "Numbers", "insertOrderedList"], ["Quote", "Quote", "formatBlock", "blockquote"],
   ]) {
+    if (short && ["insertUnorderedList", "insertOrderedList", "formatBlock"].includes(command)) continue;
     const control = button(short, () => format(command, value, text === "Emphasis"));
     control.setAttribute("aria-label", text);
     control.title = text;
+    editorIcon(control, { Bold: "strong", Italic: "italic", Emphasis: "italic", Bullets: "bulletList", Numbers: "orderedLint" }[text]);
     if (["bold", "italic", "strikeThrough", "underline"].includes(command)) {
       control.setAttribute("aria-pressed", "false");
       markControls.push([control, command]);
@@ -272,8 +287,8 @@ export function richEditor(record, key, labelText, options = {}) {
     control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
     marks.append(control);
   }
-  marks.append(block);
-  for (const kind of ["image", "video"]) {
+  if (!short) marks.append(block);
+  for (const kind of short ? [] : ["image", "video"]) {
     const control = button(kind === "image" ? "Image" : "Video", async () => {
       const mediaRange = restoreSelection(field).cloneRange();
       control.disabled = true;
@@ -315,11 +330,13 @@ export function richEditor(record, key, labelText, options = {}) {
       } finally { control.disabled = false; }
     });
     control.setAttribute("aria-label", kind === "image" ? "Phone image" : "Phone video");
+    control.title = kind === "image" ? "Insert image" : "Insert video";
+    editorIcon(control, kind);
     control.disabled = !native;
     control.addEventListener("pointerdown", () => rememberSelection(field));
     mediaActions.append(control);
   }
-  mediaActions.append(removeFigure);
+  if (!short) mediaActions.append(removeFigure);
   const selectedLink = (range = restoreSelection(field)) => {
     const node = range.commonAncestorContainer;
     return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
@@ -349,16 +366,23 @@ export function richEditor(record, key, labelText, options = {}) {
     if (current && field.contains(current)) { current.replaceWith(...current.childNodes); update(); }
     else format("unlink");
   });
+  link.setAttribute("aria-label", "Link");
+  link.title = "Insert or edit link";
+  editorIcon(link, "link");
   for (const control of [link, unlink]) {
     control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
     mediaActions.append(control);
   }
   toolbar.append(mediaActions, marks);
+  field.addEventListener("focus", () => document.execCommand("defaultParagraphSeparator", false, "p"));
+  field.addEventListener("beforeinput", (event) => {
+    if (short && ["insertOrderedList", "insertUnorderedList"].includes(event.inputType)) event.preventDefault();
+  });
   field.addEventListener("input", () => { if (emphasizeTyping) semanticEmphasis(); update(); refreshMarks(); });
   field.addEventListener("editor-selection", refreshMarks);
   field.addEventListener("keyup", refreshMarks);
   field.addEventListener("pointerup", () => { emphasizeTyping = false; refreshMarks(); });
-  field.addEventListener("blur", () => { record[key] = sanitize(field.innerHTML); });
+  field.addEventListener("blur", () => { record[key] = sanitizeContent(field.innerHTML); });
   field.addEventListener("click", (event) => {
     if (event.target.closest("a")) event.preventDefault();
     const figure = event.target.closest("figure");
@@ -372,8 +396,16 @@ export function richEditor(record, key, labelText, options = {}) {
   field.addEventListener("paste", (event) => {
     event.preventDefault();
     const html = event.clipboardData.getData("text/html");
-    if (html) document.execCommand("insertHTML", false, sanitize(html));
+    if (html) document.execCommand("insertHTML", false, sanitizeContent(html));
     else document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+    update();
+  });
+  field.addEventListener("drop", (event) => {
+    if (!short) return;
+    event.preventDefault();
+    const html = event.dataTransfer.getData("text/html");
+    if (html) document.execCommand("insertHTML", false, sanitizeContent(html));
+    else document.execCommand("insertText", false, event.dataTransfer.getData("text/plain"));
     update();
   });
   wrapper.append(label, toolbar, field);
@@ -454,7 +486,7 @@ function renderEditor() {
   $("preview-toggle").textContent = isPreview ? "Edit" : "Preview";
   const entry = findSelected();
   if (isPreview) {
-    const normalized = normalizeProject(project, sanitize);
+    const normalized = normalizeProject(project, sanitize, sanitizeShort);
     const path = entry ? `${entry.route.slice(1)}index.html` : "news/index.html";
     const html = renderSite(normalized, catalog).find((file) => file.path === path)?.html;
     $("preview").innerHTML = new DOMParser().parseFromString(html, "text/html").body.innerHTML;
@@ -492,8 +524,9 @@ function renderEditor() {
   routeNotice.id = "selected-route";
   form.append(input(record, "slug", "Slug"), input(record, "date", "Date", "date"),
     routeNotice,
-    richEditor(record, kind === "page" ? "content" : "shortContent", kind === "page" ? "Content" : "Short content"),
-    asideList(record), sectionList(record));
+    richEditor(record, kind === "page" ? "content" : "shortContent", kind === "page" ? "Content" : "Short content"));
+  if (kind === "news") form.append(richEditor(record, "content", "Long content"));
+  form.append(asideList(record), sectionList(record));
   const actions = element("div", "cluster");
   const siblings = kind === "news" ? project.news : entry.ancestors.at(-1)?.children ?? project.pages;
   const move = (offset) => {
@@ -531,14 +564,14 @@ function createContent(kind, parent) {
   let index = collection.length + 1, slug;
   do { slug = `${kind}-${index++}`; } while (collection.some((record) => record.slug === slug));
   const record = { id: newId(), title: kind === "news" ? "New story" : "New page", slug, date, sections: [], asides: [] };
-  if (kind === "news") record.shortContent = "<p></p>";
+  if (kind === "news") Object.assign(record, { shortContent: "<p></p>", content: "<p></p>" });
   else Object.assign(record, { menuTitle: "New page", content: "<p></p>", children: [] });
   collection.push(record);
   selected = record.id; isPreview = false; changed(); renderLists(); renderEditor();
 }
 async function save() {
   if (!$("editor-form").reportValidity()) throw new Error("Complete the required fields before saving.");
-  const normalized = normalizeProject(project, sanitize);
+  const normalized = normalizeProject(project, sanitize, sanitizeShort);
   const savedRevision = revision;
   saveQueue = saveQueue.catch(() => {}).then(() => request("save", { project: normalized }));
   await saveQueue;
@@ -568,11 +601,11 @@ $("add-page").addEventListener("click", run(() => createContent("page")));
 $("add-subpage").addEventListener("click", run(() => createContent("page", findSelected()?.record)));
 $("add-news").addEventListener("click", run(() => createContent("news")));
 $("preview-toggle").addEventListener("click", run(() => {
-  if (!isPreview) normalizeProject(project, sanitize);
+  if (!isPreview) normalizeProject(project, sanitize, sanitizeShort);
   isPreview = !isPreview; renderEditor();
 }));
 $("preview-news").addEventListener("click", run(() => {
-  normalizeProject(project, sanitize);
+  normalizeProject(project, sanitize, sanitizeShort);
   selected = undefined; isPreview = true; renderEditor(); renderLists();
 }));
 window.addEventListener("beforeunload", (event) => {
@@ -580,7 +613,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 run(async () => {
   const loaded = await request("load");
-  project = normalizeProject(loaded.project, sanitize); catalog = loaded.catalog;
+  project = normalizeProject(loaded.project, sanitize, sanitizeShort); catalog = loaded.catalog;
   selected = project.pages[0]?.id ?? project.news[0]?.id;
   $("storage-mode").textContent = native
     ? "Local SQLite project. Save edits before closing the app."

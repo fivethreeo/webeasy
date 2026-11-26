@@ -37,6 +37,7 @@ struct CatalogView: View {
 
 struct TemplateSourceView: View {
     let entry: CatalogEntry
+    var model: NativeEditorModel? = nil
 
     var body: some View {
         ScrollView {
@@ -49,7 +50,11 @@ struct TemplateSourceView: View {
         .navigationTitle(entry.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            NavigationLink("Preview") { WebsitePreview(path: entry.preview) }
+            if let model {
+                Button("Preview") { model.previewTemplate(entry.id) }.disabled(!model.ready || model.busy)
+            } else {
+                NavigationLink("Preview") { WebsitePreview(path: entry.preview) }
+            }
         }
     }
 }

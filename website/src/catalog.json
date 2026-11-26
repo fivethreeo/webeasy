@@ -2,6 +2,13 @@
   "version": 1,
   "templates": [
     {
+      "id": "master",
+      "title": "Master template",
+      "description": "The outer HTML document shared by every published page.",
+      "file": "templates/master.html",
+      "example": { "title": "Example website", "baseHref": "./", "blocks": ["section"] }
+    },
+    {
       "id": "page",
       "pageLayout": true,
       "title": "Simple page",
@@ -72,7 +79,7 @@
       "title": "Section",
       "description": "An owned section with a heading, rich content, and optional asides.",
       "file": "components/section.html",
-      "example": { "heading": "A section", "content": "<p>Rich text belongs here.</p>" }
+      "example": { "heading": "A section", "subheading": "An optional introduction", "content": "<p>Rich text belongs here.</p>" }
     },
     {
       "id": "aside",

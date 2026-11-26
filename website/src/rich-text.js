@@ -29,7 +29,7 @@ export function localMediaPath(value) {
     !value.split("/").some((part) => part === "." || part === "..");
 }
 
-export function createRichTextSanitizer(window) {
+export function createRichTextSanitizer(window, paragraphsOnly = false) {
   const purifier = createDOMPurify(window);
   purifier.addHook("uponSanitizeAttribute", (node, data) => {
     const tag = node.tagName.toLowerCase();
@@ -46,7 +46,7 @@ export function createRichTextSanitizer(window) {
   });
   return (html) => {
     const fragment = purifier.sanitize(html, {
-      ALLOWED_TAGS: richTextTags,
+      ALLOWED_TAGS: paragraphsOnly ? [...richTextTags, "div"] : richTextTags,
       ALLOWED_ATTR: [...new Set(Object.values(attributes).flat())],
       ALLOW_DATA_ATTR: false,
       ALLOW_ARIA_ATTR: false,
@@ -99,6 +99,31 @@ export function createRichTextSanitizer(window) {
     }
     const container = window.document.createElement("div");
     container.append(fragment);
+    if (paragraphsOnly) {
+      const output = window.document.createElement("div");
+      let paragraph = window.document.createElement("p");
+      const flush = () => {
+        if (paragraph.textContent.trim() || paragraph.querySelector("br")) output.append(paragraph);
+        paragraph = window.document.createElement("p");
+      };
+      const inline = new Set(["BR", "B", "STRONG", "I", "EM", "S", "STRIKE", "DEL", "U", "A"]);
+      const visit = (node) => {
+        if (node.nodeType === 3) { paragraph.append(node.cloneNode(true)); return; }
+        if (node.nodeType !== 1 || node.matches("img,video,source")) return;
+        if (inline.has(node.tagName) && !node.querySelector("p,div,h1,h2,h3,h4,h5,h6,ul,ol,li,blockquote,figure")) {
+          const copy = node.cloneNode(true);
+          copy.querySelectorAll("img,video,source").forEach((media) => media.remove());
+          paragraph.append(copy);
+        } else {
+          flush();
+          [...node.childNodes].forEach(visit);
+          flush();
+        }
+      };
+      [...container.childNodes].forEach(visit);
+      flush();
+      return output.innerHTML;
+    }
     return container.innerHTML;
   };
 }

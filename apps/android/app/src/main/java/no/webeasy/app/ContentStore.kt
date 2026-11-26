@@ -23,7 +23,7 @@ import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
 
 class ContentStore(private val context: Context) :
-    SQLiteOpenHelper(context, "webeasy.sqlite", null, 2) {
+    SQLiteOpenHelper(context, "webeasy.sqlite", null, 4) {
     val mediaDirectory = File(context.filesDir, "Media").apply { mkdirs() }
 
     init {
@@ -52,8 +52,17 @@ class ContentStore(private val context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        check(oldVersion == 1 && newVersion == 2) { "A database migration is required. Your existing content has not been deleted." }
-        db.execSQL("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'")
+        check(oldVersion in 1..3 && newVersion == 4) { "A database migration is required. Your existing content has not been deleted." }
+        if (oldVersion == 1) db.execSQL("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'")
+        if (oldVersion < 3) {
+            for (table in listOf("pages", "news")) {
+                db.execSQL("ALTER TABLE $table ADD COLUMN cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL")
+                db.execSQL("ALTER TABLE $table ADD COLUMN cover_alt TEXT NOT NULL DEFAULT ''")
+            }
+            db.execSQL("ALTER TABLE sections ADD COLUMN subheading TEXT NOT NULL DEFAULT ''")
+        }
+        db.execSQL("ALTER TABLE news ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+        db.execSQL("UPDATE news SET content = short_content")
     }
 
     private fun rows(db: SQLiteDatabase, sql: String, args: Array<String>? = null): JSONArray {
@@ -83,7 +92,7 @@ class ContentStore(private val context: Context) :
     private fun related(db: SQLiteDatabase, record: JSONObject, owner: String): JSONObject {
         val id = record.getString("id")
         record.put("asides", asides(db, owner, id))
-        val sections = rows(db, "SELECT id, heading, content FROM sections WHERE ${owner}_id = ? ORDER BY position", arrayOf(id))
+        val sections = rows(db, "SELECT id, heading, subheading, content FROM sections WHERE ${owner}_id = ? ORDER BY position", arrayOf(id))
         sections.objects().forEach { section -> section.put("asides", asides(db, "section", section.getString("id"))) }
         record.put("sections", sections)
         return record
@@ -91,8 +100,8 @@ class ContentStore(private val context: Context) :
 
     private fun pages(db: SQLiteDatabase, parent: String?): JSONArray {
         val records = if (parent == null) rows(db,
-            "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
-        else rows(db, "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
+            "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
+        else rows(db, "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
         records.objects().forEach { page ->
             related(db, page, "page")
             page.put("children", pages(db, page.getString("id")))
@@ -105,7 +114,7 @@ class ContentStore(private val context: Context) :
         val pages = pages(db, null)
         val home = rows(db, "SELECT value FROM metadata WHERE key = 'home_page_id'").objects().firstOrNull()?.getString("value")
             ?: pages.objects().firstOrNull()?.getString("id")
-        val news = rows(db, "SELECT id, title, slug, date, short_content AS shortContent FROM news ORDER BY date DESC, slug")
+        val news = rows(db, "SELECT id, title, slug, date, content, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, short_content AS shortContent FROM news ORDER BY date DESC, slug")
         news.objects().forEach { related(db, it, "news") }
         return JSONObject().put("version", 1).put("homePageId", home ?: JSONObject.NULL).put("pages", pages).put("news", news)
             .put("media", rows(db, "SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id"))
@@ -129,6 +138,15 @@ class ContentStore(private val context: Context) :
     fun savePublishedSnapshot(project: JSONObject) {
         writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('published_project', ?)",
             arrayOf(project.toString()))
+    }
+
+    fun templateSources(): JSONObject? =
+        rows(readableDatabase, "SELECT value FROM metadata WHERE key = 'template_sources'")
+            .optJSONObject(0)?.getString("value")?.let(::JSONObject)
+
+    fun saveTemplateSources(sources: JSONObject) {
+        writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
+            arrayOf(sources.toString()))
     }
 
     private fun insert(db: SQLiteDatabase, table: String, values: Map<String, Any?>) {
@@ -173,7 +191,8 @@ class ContentStore(private val context: Context) :
         record.optJSONArray("sections")?.objects()?.forEachIndexed { position, section ->
             val sectionId = id(section)
             insert(db, "sections", mapOf("id" to sectionId, "${owner}_id" to ownerId,
-                "heading" to text(section, "heading", true), "content" to text(section, "content"), "position" to position))
+                "heading" to text(section, "heading", true), "subheading" to section.optString("subheading"),
+                "content" to text(section, "content"), "position" to position))
             writeAsides(db, section, "section", sectionId)
         }
     }
@@ -186,7 +205,9 @@ class ContentStore(private val context: Context) :
             require(templateId.matches(Regex("[a-z][a-z0-9-]*"))) { "Invalid page layout ID." }
             if (parent == null) require(pageSlug !in setOf("news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"))
             insert(db, "pages", mapOf("id" to pageId, "parent_id" to parent, "title" to text(page, "title", true),
-                "menu_title" to text(page, "menuTitle", true), "template_id" to templateId, "slug" to pageSlug, "content" to text(page, "content"),
+                "menu_title" to text(page, "menuTitle", true), "template_id" to templateId,
+                "cover_media_id" to page.optString("coverMediaId").takeIf(String::isNotEmpty), "cover_alt" to page.optString("coverAlt"),
+                "slug" to pageSlug, "content" to text(page, "content"),
                 "date" to date(page), "position" to position))
             writeRelated(db, page, "page", pageId)
             writePages(db, page.optJSONArray("children") ?: JSONArray(), pageId)
@@ -207,7 +228,9 @@ class ContentStore(private val context: Context) :
         project.getJSONArray("news").objects().forEach { news ->
             val newsId = id(news)
             insert(db, "news", mapOf("id" to newsId, "title" to text(news, "title", true),
-                "slug" to slug(news), "date" to date(news), "short_content" to text(news, "shortContent")))
+                "slug" to slug(news), "date" to date(news), "short_content" to text(news, "shortContent"),
+                "content" to if (news.has("content")) text(news, "content") else text(news, "shortContent"),
+                "cover_media_id" to news.optString("coverMediaId").takeIf(String::isNotEmpty), "cover_alt" to news.optString("coverAlt")))
             writeRelated(db, news, "news", newsId)
         }
     }
@@ -275,7 +298,7 @@ class ContentStore(private val context: Context) :
     }
 
     fun importMedia(input: InputStream, mimeType: String, originalName: String, basename: String = "",
-                    width: Int? = null, quality: Int? = null): JSONObject {
+                    width: Int? = null, quality: Int? = null, minimumWidth: Int? = null): JSONObject {
         val id = UUID.randomUUID().toString()
         val requested = basename.trim()
         val stem = requested.ifEmpty { id }
@@ -303,6 +326,10 @@ class ContentStore(private val context: Context) :
                 temporary.outputStream().use(source::copyTo)
             }
             require(temporary.length() > 0) { "The selected media file is empty." }
+            if (minimumWidth != null) {
+                require(mimeType.startsWith("image/") && (width == null || width >= minimumWidth)) { "Cover width must be at least $minimumWidth pixels." }
+                verifyMinimumWidth(temporary, minimumWidth)
+            }
             var type = mimeType.lowercase()
             if (type.startsWith("image/") && (width != null || quality != null)) {
                 val image = optimizedBitmap(temporary, type, width)
@@ -333,6 +360,7 @@ class ContentStore(private val context: Context) :
                 check(temporary.renameTo(destination)) { "Cannot store the selected media." }
             }
             val file = requireNotNull(destination)
+            if (minimumWidth != null) verifyMinimumWidth(file, minimumWidth)
             val media = JSONObject().put("id", id).put("filename", file.name).put("mimeType", type)
                 .put("originalName", originalName).put("size", file.length())
             insert(writableDatabase, "media", mapOf("id" to id, "filename" to file.name,
@@ -342,6 +370,14 @@ class ContentStore(private val context: Context) :
             destination?.delete()
             throw error
         } finally { temporary.delete() }
+    }
+
+    private fun verifyMinimumWidth(file: File, minimum: Int) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        val orientation = runCatching { ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, 1) }.getOrDefault(1)
+        val width = if (orientation in 5..8) bounds.outHeight else bounds.outWidth
+        require(width >= minimum) { "Cover images must be at least $minimum pixels wide; smaller images are not enlarged." }
     }
 
     fun prepareSite(files: JSONArray, references: JSONArray): File {

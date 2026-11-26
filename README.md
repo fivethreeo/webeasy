@@ -16,6 +16,27 @@ can be read from saved pictures/screenshots or a camera photo. The Hosting tab
 publishes the generated website directly using FTP, explicit FTPS, or SFTP.
 Dropbox backup is not implemented.
 
+The apps default to **Simple** mode and remember the choice on the device.
+Simple hides sections, covers, template loading, and the public URL prefix;
+asides and subpages remain available. Switching modes never deletes hidden
+content or resets saved publishing settings. **Advanced** exposes every option.
+Simple image dialogs default to a 400-pixel maximum width and JPEG quality 85%;
+these are editable defaults, not forced values. Advanced starts with both unset.
+
+News has separate **Short content** and **Long content** fields. Short content
+supports only paragraphs, inline formatting, and links, with no headings, lists,
+quotes, images, or videos. It supplies the latest-news summaries; long content
+supplies the full story and supports normal rich text. Existing short-field
+markup is copied into the new long field when migrating, preserving old media.
+The rich-text toolbar bundles Prosango's actual SVG icons for bold, italic,
+lists, links, images, and video, with accessible labels; unmatched controls retain
+text labels.
+
+Advanced mode offers optional covers for pages, subpages, and news. Covers
+appear below the title and on news summaries, require an original and final
+width of at least 1200 pixels, and support optional resizing/JPEG quality.
+Removing a cover clears its reference without deleting the imported media.
+
 ## Structure
 
 ```text
@@ -69,13 +90,34 @@ images, video players, callouts), not a generic layout builder. Every Layout
 primitives are internal CSS implementation details: no stack/grid/cluster
 components, CSS controls, or HTML source panels are exposed in the app showcase.
 
+The **Templates** tab has **Load templates from server**. Publishing creates
+`webeasy_templates/templates/*.html` (including `master.html`) and
+`webeasy_templates/components/*.html` under the configured upload destination.
+Only missing source files are uploaded; existing server edits are preserved.
+Edit these UTF-8 files on your own hosting, then load them into the app. All files
+must load and validate before any local source is replaced. Loaded sources are
+saved in SQLite and survive restarts and app updates; previews, exports, and the
+next publish use them. This loads existing registered templates, not new catalog
+entries. Each file is limited to 256 KiB. Loading templates does not save or
+replace your page/news content.
+
 Use `{{field}}` for escaped plain text or attribute values. Templates and structured components
 may use `{{{content}}}` to insert trusted, rendered content HTML. Templates and
-component HTML are developer-authored, not arbitrary user-supplied markup.
+component HTML are trusted code from your bundle or your own hosting. The master
+template supplies the outer document and additionally accepts
+`{{{navigation}}}` for the generated main menu, `{{title}}`, and `{{baseHref}}`.
+Keep `{{{content}}}` in every page template. Keep the master template's base URL,
+local stylesheet/script references and Content Security Policy unless you
+deliberately want to change those behaviors.
 Add your styles and scripts in `website/src/site.css` and `site.js`, and bundled
 media in `website/src/assets/`. Example media paths are relative to the site root.
 The video example deliberately has a poster but no clip; it is a placeholder
 until a project supplies video media.
+
+Owned sections have an optional plain-text subheading. Their header contains
+the heading and optional paragraph together; `aria-labelledby` links the section
+to the heading's generated ID. IDs follow Prosango's normalized 25-character
+slugs, with per-document collisions numbered `-1`, `-2`, and so on.
 
 The generated `catalog.json` includes HTML source, example data, and preview paths
 for both native clients and future editing/generation code. All previews use the
@@ -125,7 +167,7 @@ changed page or news form asks to Save, Don't save, or Cancel. Discard restores
 that item's owned content without discarding unrelated drafts. Save explicitly
 before closing; export and publishing save their content snapshot first. Android exports a ZIP through the share
 sheet, and iOS exports a website folder through Files. Only referenced media,
-generated HTML, and website assets are exported, never the editable SQLite
+generated HTML, template source files, and website assets are exported, never the editable SQLite
 database, editor, catalog, or hosting credentials. Backup remains a future
 integration. Keep the live SQLite database local and create
 consistent snapshots for backup. Configure Dropbox separately from QR-provisioned
@@ -144,7 +186,9 @@ content comparisons, not a check of server files or hosting settings.
 
 **Templates** opens selectable template source code, with a **Preview** action.
 Image/video details open in a full-screen native view. Image import optionally
-accepts a maximum pixel width and JPEG quality percentage; leave both blank for
+accepts a maximum pixel width and JPEG quality percentage, with selectable common
+presets and custom values. Advanced mode starts both presets at **None**;
+Simple defaults to 400 pixels and 85% JPEG quality. Leave both blank for
 the existing import behavior. Resizing changes the saved file, preserves aspect
 ratio and orientation, and never enlarges smaller images. Resized JPEG defaults
 to 85% quality; PNG remains lossless with transparency. Animated images must be
@@ -160,7 +204,7 @@ from the selected content template.
 `website/src/content.json` is the example/first-install seed. Pages have `title`,
 `menuTitle`, `slug`, `content`, and an ISO `date`, plus optional ordered `children`,
 `sections`, and `asides`. Subpages become `/parent/child/`. News has `title`, `slug`,
-`date`, and `shortContent`, plus optional sections/asides. The news index at
+`date`, `shortContent`, and long `content`, plus optional sections/asides. The news index at
 `/news/` contains the three newest items as articles; all news items have full
 pages at `/news/YYYY-MM-DD/slug/`, including older items outside that listing.
 Sections have heading/content and optional asides. Asides have content and an

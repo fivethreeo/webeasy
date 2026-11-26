@@ -4,14 +4,83 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
 import { loadCatalog } from "./catalog.mjs";
-import { loadProject, sanitizeRichText, contentWindow } from "./content.mjs";
+import { loadProject, sanitizeRichText, sanitizeShortText, contentWindow } from "./content.mjs";
 import { normalizeProject, pageRoutes, renderSite, referencedMedia } from "../src/content-model.js";
+import { uniqueHeadingId } from "../src/heading-id.js";
 
 const source = fileURLToPath(new URL("../src", import.meta.url));
 const input = JSON.parse(await readFile(new URL("../src/content.json", import.meta.url), "utf8"));
 const catalog = await loadCatalog(source);
-const normalize = (project) => normalizeProject(project, sanitizeRichText);
+const normalize = (project) => normalizeProject(project, sanitizeRichText, sanitizeShortText);
 const dom = (html) => new JSDOM(html).window.document;
+
+test("short news uses only paragraphs and inline formatting while long news retains rich content", () => {
+  const short = sanitizeShortText('<h2>Intro <strong>bold</strong></h2><ul><li>One</li><li><em>Two</em></li></ul><blockquote>Quote</blockquote><figure><img src="media/photo.jpg"><figcaption>Caption</figcaption></figure><div>New paragraph <a href="/about/">link</a></div>');
+  const document = dom(short);
+  assert.deepEqual([...document.body.children].map((node) => node.tagName), ["P", "P", "P", "P", "P", "P"]);
+  assert.ok(document.querySelector("strong"));
+  assert.ok(document.querySelector("em"));
+  assert.equal(document.querySelector("a").getAttribute("href"), "/about/");
+  assert.equal(document.querySelector("h2,ul,li,blockquote,figure,img,video"), null);
+  assert.equal(sanitizeShortText(short), short);
+  const project = structuredClone(input);
+  project.news[0].shortContent = "<p>Summary only</p>";
+  project.news[0].content = "<h2>Full story</h2><p>Long body</p>";
+  const files = renderSite(normalize(project), catalog);
+  const full = files.find((file) => file.path === `news/${project.news[0].date}/${project.news[0].slug}/index.html`).html;
+  assert.ok(full.includes("Full story"));
+  assert.ok(!full.includes("Summary only"));
+  const listing = files.find((file) => file.path === "news/index.html").html;
+  assert.ok(listing.includes("Summary only"));
+  assert.ok(!listing.includes("Long body"));
+});
+
+test("legacy news keeps its full short-field markup as long content and covers appear in both news views", () => {
+  const project = structuredClone(input);
+  project.news[0].shortContent = '<h2>Legacy heading</h2><figure><img src="media/legacy.jpg" alt="Legacy"></figure>';
+  project.media = [{ id: "legacy-media", filename: "legacy.jpg", mimeType: "image/jpeg", originalName: "legacy.jpg", size: 12 }];
+  project.news[0].coverMediaId = "legacy-media";
+  project.news[0].coverAlt = '"<cover>';
+  const normalized = normalize(project);
+  assert.ok(normalized.news[0].content.includes("<figure"));
+  assert.equal(dom(normalized.news[0].shortContent).querySelector("img"), null);
+  const files = renderSite(normalized, catalog);
+  const paths = ["news/index.html", `news/${project.news[0].date}/${project.news[0].slug}/index.html`];
+  for (const path of paths) {
+    const image = dom(files.find((file) => file.path === path).html).querySelector(".cover-image img");
+    assert.equal(image.getAttribute("src"), "media/legacy.jpg");
+    assert.equal(image.getAttribute("alt"), '"<cover>');
+  }
+  assert.ok(referencedMedia(normalized, contentWindow).includes("media/legacy.jpg"));
+});
+
+test("section headings use Prosango slugs, collision tracking and escaped optional subheadings", () => {
+  const used = new Set();
+  assert.equal(uniqueHeadingId("Héllo & World!", used), "hello-world");
+  assert.equal(uniqueHeadingId("Hello world", used), "hello-world-1");
+  assert.equal(uniqueHeadingId("Hello world", used), "hello-world-2");
+  assert.equal(uniqueHeadingId("Hello world-1", used), "hello-world-1-1");
+  assert.equal(uniqueHeadingId("!!!", used), "label");
+  assert.equal(uniqueHeadingId("!!!", used), "label-1");
+  assert.equal(uniqueHeadingId("a".repeat(40), used).length, 25);
+  assert.equal(uniqueHeadingId("a".repeat(40), used), `${"a".repeat(23)}-1`);
+  const project = structuredClone(input);
+  project.pages[0].sections = [
+    { id: "heading-test-a", heading: "Héllo World", subheading: "<img src=x onerror=alert(1)>", content: "<p>Body</p>" },
+    { id: "heading-test-b", heading: "Hello World", content: "<p>Body</p>" },
+    { id: "heading-test-c", heading: "Hello World", subheading: " ", content: "<p>Body</p>" },
+  ];
+  const page = dom(renderSite(normalize(project), catalog).find((file) => file.path === "about/index.html").html);
+  const sections = [...page.querySelectorAll("section[aria-labelledby]")];
+  assert.deepEqual(sections.map((section) => section.getAttribute("aria-labelledby")), ["hello-world", "hello-world-1", "hello-world-2"]);
+  for (const section of sections) {
+    assert.equal(section.querySelector(":scope > header > h2").id, section.getAttribute("aria-labelledby"));
+  }
+  assert.equal(sections[0].querySelector(":scope > header > p").textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(sections[0].querySelector("header img"), null);
+  assert.equal(sections[1].querySelector("header p"), null);
+  assert.equal(sections[2].querySelector("header p"), null);
+});
 
 test("rich text keeps supported formatting and local figures, but removes executable and remote markup", () => {
   const html = sanitizeRichText(`<h1>Heading</h1><p><b>B</b><strong>S</strong><i>I</i><em>E</em><u>U</u><s>S</s><del>D</del></p>

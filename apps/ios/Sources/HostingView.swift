@@ -90,8 +90,10 @@ struct HostingView: View {
                     .disabled(model.busy || hostingServer == nil)
                 }
                 Section("Publishing paths") {
-                    LabeledTextField(title: "Public URL prefix (optional)", text: $publicPathPrefix)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if model.advancedUI {
+                        LabeledTextField(title: "Public URL prefix (optional)", text: $publicPathPrefix)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
                     LabeledTextField(title: "Upload subfolder (optional)", text: $uploadSubfolder)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
@@ -118,13 +120,6 @@ struct HostingView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Save and upload the website to your saved destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.")
-            }
-            .alert("Trust SFTP server key?", isPresented: Binding(get: { model.pendingHostKey != nil },
-                set: { if !$0 { model.pendingHostKey = nil } }), presenting: model.pendingHostKey) { key in
-                Button("Trust and publish") { model.trustHostKey(key) }
-                Button("Cancel", role: .cancel) {}
-            } message: { key in
-                Text("\(key.host):\(key.port)\n\(key.fingerprint)\nCompare this fingerprint with your server before trusting it. No password has been sent.")
             }
             .task {
                 if let data = HostingCredentials.load(),
