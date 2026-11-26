@@ -139,7 +139,12 @@ async function openField(page, content = "<p>Hello from the phone</p>", nativeDe
         if (method === "resize") window.__fieldHeight = payload.height;
         if (method === "pickMedia") window.__mediaRequest = payload;
         if (method === "mediaDetails") window.__mediaDetailsRequest = payload;
-        const result = method === "ready" && nativeDetails ? { mediaDetails: true }
+        if (method === "linkDetails") {
+          window.__linkDetailsRequest = payload;
+          window.__replyLinkDetails = (result) => window.WebeasyBridge.receive({ id, result });
+          return;
+        }
+        const result = method === "ready" && nativeDetails ? { mediaDetails: true, linkDetails: nativeDetails.linkDetails === true }
           : method === "mediaDetails" ? nativeDetails.result
           : method === "pageLinks" ? { pages: project.pages, homePageId: project.pages[0].id } : method === "pickMedia" ? (payload.kind === "image"
           ? { id: "field-image", filename: payload.basename ? `${payload.basename}.png` : "native-test.png", mimeType: "image/png", originalName: "Phone photo.png", size: photoSize }
@@ -152,6 +157,47 @@ async function openField(page, content = "<p>Hello from the phone</p>", nativeDe
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
 }
+
+test("native link views preserve selection, formatted text, cancellation and removal", async ({ page }) => {
+  await openField(page, "<p>Before <strong>our team</strong> after</p>", { linkDetails: true });
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field.querySelector("strong"));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__linkDetailsRequest?.text)).toBe("our team");
+  expect(await page.evaluate(() => window.__linkDetailsRequest)).toMatchObject({
+    editing: false, textReadOnly: true, href: "", pages: expect.arrayContaining([expect.objectContaining({ href: "index.html" })]),
+  });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await field.evaluate((field) => getSelection().setBaseAndExtent(field, 0, field, 0));
+  await page.evaluate(() => window.__replyLinkDetails({ href: "about/team/", text: "our team" }));
+  await expect(field.locator("a")).toHaveText("our team");
+  await expect(field.locator("strong")).toHaveText("our team");
+  await expect(field.locator("a strong, strong a")).toHaveCount(1);
+  await expect(field).toHaveText("Before our team after");
+  for (const response of [null, { href: "javascript:alert(1)", text: "unsafe" }, { remove: true }]) {
+    await field.evaluate((field) => {
+      window.__linkDetailsRequest = null;
+      field.focus();
+      const range = document.createRange();
+      range.selectNode(field.querySelector("a"));
+      getSelection().removeAllRanges(); getSelection().addRange(range);
+    });
+    await page.getByRole("button", { name: "Link", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__linkDetailsRequest?.editing)).toBe(true);
+    await page.evaluate((response) => window.__replyLinkDetails(response), response);
+    if (response?.remove) await expect(field.locator("a")).toHaveCount(0);
+    else await expect(field.locator("a")).toHaveAttribute("href", "about/team/");
+    await expect(field.locator("strong")).toHaveText("our team");
+    await expect(field).toHaveText("Before our team after");
+  }
+  expect(await page.evaluate(() => ["about/", "https://example.com", "mailto:test@example.com", "tel:123", "../private", "javascript:alert(1)", ""]
+    .map((href) => window.WebeasyField.validLink(href)))).toEqual([true, true, true, true, false, false, false]);
+});
 
 test("short news fields retain formatting but omit structural and media controls and clean pasted blocks", async ({ page }) => {
   await openField(page, "<h2>Heading</h2><p><strong>Bold</strong> text</p>", null, { paragraphsOnly: true });

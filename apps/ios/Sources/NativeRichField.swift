@@ -75,7 +75,7 @@ struct NativeRichField: UIViewRepresentable {
                   let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let id = body["id"] as? String else { return }
             let payload = body["payload"] as? [String: Any] ?? [:]
             switch body["method"] as? String {
-            case "ready": ready = true; setValue(parent.content); send(id, ["mediaDetails": true])
+            case "ready": ready = true; setValue(parent.content); send(id, ["mediaDetails": true, "linkDetails": true])
             case "change":
                 if let content = payload["content"] as? String { value = content; parent.content = content }
                 send(id)
@@ -83,6 +83,28 @@ struct NativeRichField: UIViewRepresentable {
             case "pageLinks":
                 send(id, ["pages": parent.model.pages.map(\.json),
                           "homePageId": parent.model.homePageID.map { $0 as Any } ?? NSNull()])
+            case "linkDetails":
+                guard let rootController = view?.window?.rootViewController else {
+                    send(id, NSNull(), "Cannot open link details."); return
+                }
+                var presenter = rootController
+                while let presented = presenter.presentedViewController { presenter = presented }
+                let controller = UIHostingController(rootView: LinkDetailsView(details: payload, validate: { [weak self] href, completion in
+                    guard let view = self?.view,
+                          let data = try? JSONSerialization.data(withJSONObject: href, options: .fragmentsAllowed) else {
+                        completion(false); return
+                    }
+                    view.evaluateJavaScript("window.WebeasyField.validLink(\(String(decoding: data, as: UTF8.self)))") { value, _ in
+                        completion(value as? Bool == true)
+                    }
+                }, completion: { [weak self] details in
+                    let response = Self.response(id, details.map { $0 as Any } ?? NSNull())
+                    presenter.dismiss(animated: true) {
+                        self?.view?.evaluateJavaScript("window.WebeasyBridge.receive(\(response));")
+                    }
+                }))
+                controller.modalPresentationStyle = .fullScreen
+                presenter.present(controller, animated: true)
             case "mediaDetails":
                 guard !parent.paragraphsOnly, let kind = payload["kind"] as? String, ["image", "video"].contains(kind),
                       let rootController = view?.window?.rootViewController else { send(id, NSNull(), "Cannot open media details."); return }

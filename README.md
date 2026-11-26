@@ -17,6 +17,8 @@ publishes the generated website directly using FTP, explicit FTPS, or SFTP.
 Dropbox backup is not implemented.
 
 **Settings** contains the Simple/Advanced mode selector and **Templates**.
+Links use a native full-screen form like image details, with page selection,
+URL and text fields, and Remove link inside the edit view.
 Android uses a native bottom navigation bar on phones and a left navigation rail
 on tablets (smallest window width at least 600dp), with matching outline symbols
 for Pages, News, Settings, Changes, and Hosting. Navigation stays out of pushed

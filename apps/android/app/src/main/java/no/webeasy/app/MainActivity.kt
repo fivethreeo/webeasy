@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
     private val screens = mutableStateListOf<Screen>()
     private var pendingMedia: PendingMedia? = null
     private var pendingMediaDetails by mutableStateOf<PendingMediaDetails?>(null)
+    private var pendingLinkDetails by mutableStateOf<PendingLinkDetails?>(null)
     private var pendingQRPhoto: File? = null
     private val drafts = ContentDrafts()
     private var pendingBack by mutableStateOf<Screen?>(null)
@@ -130,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private data class PendingMedia(val id: String, val kind: String, val view: WebView?, val basename: String,
                                     val width: Int?, val quality: Int?, val coverRecord: JSONObject? = null, val coverAlt: String = "")
     private data class PendingMediaDetails(val id: String, val kind: String, val view: WebView?, val coverRecord: JSONObject? = null)
+    private data class PendingLinkDetails(val id: String, val view: WebView, val details: JSONObject)
 
     private val mediaPicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val pending = pendingMedia ?: return@registerForActivityResult
@@ -335,6 +337,18 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     pendingMediaDetails?.let { pending -> key(pending.id) { MediaDetails(pending) } }
+                    pendingLinkDetails?.let { pending -> key(pending.id) {
+                        LinkDetails(pending.details, validate = { href, completion ->
+                            pending.view.evaluateJavascript("window.WebeasyField.validLink(${JSONObject.quote(href)})") { result ->
+                                completion(result == "true")
+                            }
+                        }, finish = { result ->
+                            if (pendingLinkDetails?.id == pending.id) {
+                                pendingLinkDetails = null
+                                respond(pending.view, pending.id, result ?: JSONObject.NULL)
+                            }
+                        })
+                    } }
                 }
             }
         }
@@ -893,11 +907,15 @@ class MainActivity : ComponentActivity() {
                 val id = message.optString("id")
                 val payload = message.optJSONObject("payload") ?: JSONObject()
                 when (message.optString("method")) {
-                    "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id, JSONObject().put("mediaDetails", true)) }
+                    "ready" -> { ready = true; pushValue(record.optString(key)); respond(view, id, JSONObject().put("mediaDetails", true).put("linkDetails", true)) }
                     "change" -> { value = payload.getString("content"); record.put(key, value); changed(); respond(view, id) }
                     "resize" -> respond(view, id)
                     "pageLinks" -> respond(view, id, JSONObject().put("pages", project?.getJSONArray("pages") ?: JSONArray())
                         .put("homePageId", project?.opt("homePageId") ?: JSONObject.NULL))
+                    "linkDetails" -> {
+                        if (pendingLinkDetails != null || pendingMediaDetails != null) respond(view, id, error = "Cannot open link details.")
+                        else pendingLinkDetails = PendingLinkDetails(id, view, payload)
+                    }
                     "mediaDetails" -> {
                         val kind = payload.optString("kind")
                         if (key == "shortContent" || pendingMediaDetails != null || kind !in listOf("image", "video"))

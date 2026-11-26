@@ -118,19 +118,19 @@ export function figureDetails(kind, options = {}) {
     dialog.showModal();
   });
 }
-function linkDetails(project, selectedText, current) {
+function linkDetails({ pages: choices, href, text: initialText, editing, textReadOnly }) {
   const dialog = document.createElement("dialog");
   const form = element("form", "stack");
   form.method = "dialog";
-  form.append(element("h2", "", current ? "Edit link" : "Insert link"));
+  form.append(element("h2", "", editing ? "Edit link" : "Insert link"));
   const pageLabel = element("label", "stack", "Page or subpage");
   const pages = document.createElement("select");
   const custom = element("option", "", "Enter a URL");
   custom.value = "";
   pages.append(custom);
-  for (const entry of pageRoutes(project.pages ?? [])) {
-    const option = element("option", "", [...entry.ancestors, entry.record].map((page) => page.menuTitle || page.title).join(" / "));
-    option.value = entry.record.id === (project.homePageId ?? project.pages[0]?.id) ? "index.html" : entry.route.slice(1);
+  for (const choice of choices) {
+    const option = element("option", "", choice.title);
+    option.value = choice.href;
     pages.append(option);
   }
   pageLabel.append(pages);
@@ -139,14 +139,14 @@ function linkDetails(project, selectedText, current) {
   url.type = "text";
   url.inputMode = "url";
   url.required = true;
-  url.value = current?.getAttribute("href") ?? "";
+  url.value = href;
   url.placeholder = "https://example.com";
   urlLabel.append(url);
   const textLabel = element("label", "stack", "Link text");
   const text = document.createElement("input");
   text.type = "text";
-  text.value = current?.textContent ?? selectedText;
-  text.readOnly = Boolean(selectedText) && !current;
+  text.value = initialText;
+  text.readOnly = textReadOnly;
   textLabel.append(text);
   if (url.value && [...pages.options].some((option) => option.value === url.value)) pages.value = url.value;
   const validate = () => url.setCustomValidity(url.value && !safeLinkHref(url.value.trim())
@@ -160,11 +160,11 @@ function linkDetails(project, selectedText, current) {
   });
   url.addEventListener("input", () => { pages.value = ""; validate(); });
   const actions = element("div", "cluster");
-  const insert = element("button", "", current ? "Save link" : "Insert link");
+  const insert = element("button", "", editing ? "Save link" : "Insert link");
   insert.type = "submit";
   insert.value = "insert";
   actions.append(insert, button("Cancel", () => dialog.close("cancel")));
-  if (current) actions.append(button("Remove link", () => dialog.close("remove")));
+  if (editing) actions.append(button("Remove link", () => dialog.close("remove")));
   form.append(pageLabel, urlLabel, textLabel, actions);
   form.addEventListener("submit", (event) => {
     validate();
@@ -176,7 +176,7 @@ function linkDetails(project, selectedText, current) {
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => {
       resolve(dialog.returnValue === "remove" ? { remove: true } : dialog.returnValue === "insert" ? {
-        href: url.value.trim(), text: !current && selectedText ? selectedText : text.value || url.value.trim(),
+        href: url.value.trim(), text: textReadOnly ? initialText : text.value || url.value.trim(),
       } : null);
       dialog.remove();
     }, { once: true });
@@ -365,8 +365,23 @@ export function richEditor(record, key, labelText, options = {}) {
     const current = selectedLink(linkRange);
     const selectedText = linkRange.toString();
     const linkProject = options.getLinkProject ? await options.getLinkProject() : contentProject;
-    const details = await linkDetails(linkProject, selectedText, current);
+    const configuration = {
+      href: current?.getAttribute("href") ?? "",
+      text: current?.textContent ?? selectedText,
+      editing: Boolean(current),
+      textReadOnly: Boolean(selectedText) && !current,
+      pages: pageRoutes(linkProject.pages ?? []).map((entry) => ({
+        title: [...entry.ancestors, entry.record].map((page) => page.menuTitle || page.title).join(" / "),
+        href: entry.record.id === (linkProject.homePageId ?? linkProject.pages?.[0]?.id) ? "index.html" : entry.route.slice(1),
+      })),
+    };
+    const details = await (options.getLinkDetails?.(configuration) ?? linkDetails(configuration));
     if (!details) { restoreSelection(field, linkRange); return; }
+    if (!details.remove && !safeLinkHref(details.href)) {
+      restoreSelection(field, linkRange);
+      status("Use a web, email, telephone, or local page URL.");
+      return;
+    }
     const range = restoreSelection(field, linkRange);
     if (details.remove) {
       if (current && field.contains(current)) current.replaceWith(...current.childNodes);
