@@ -51,6 +51,7 @@ select {
 
 .formatting {
   --gap: var(--s-5);
+  --editor-icon-size: 2em;
   min-inline-size: 0;
   align-items: center;
   flex-wrap: nowrap;
@@ -105,12 +106,18 @@ dialog::backdrop {
 
 .editor-icon {
   display: block;
-  inline-size: 1.25em;
-  block-size: 1.25em;
+  inline-size: var(--editor-icon-size);
+  block-size: var(--editor-icon-size);
   fill: currentColor;
 }
 
 .icon-button {
-  min-inline-size: 1.5rem;
-  min-block-size: 1.5rem;
+  min-inline-size: 2.4rem;
+  min-block-size: 2.4rem;
+}
+
+@media (min-width: 48rem) {
+  .formatting {
+    --editor-icon-size: 3em;
+  }
 }

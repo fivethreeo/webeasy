@@ -642,6 +642,34 @@ test("Prosango quote icon keeps its accessible name and applies blockquote forma
   await expect.poll(() => page.evaluate(() => window.__content)).toContain("<blockquote>");
 });
 
+test("toolbar icons are larger on phones and extra large on tablets without wrapping", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await openField(page);
+  const toolbar = page.getByRole("group", { name: "Content formatting", exact: true });
+  const measure = () => toolbar.evaluate((toolbar) => {
+    const icon = toolbar.querySelector(".editor-icon").getBoundingClientRect();
+    const centers = [...toolbar.querySelectorAll("button,select")].map((control) => {
+      const rect = control.getBoundingClientRect();
+      return rect.y + rect.height / 2;
+    });
+    return { width: icon.width, height: icon.height,
+      fontSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+      spread: Math.max(...centers) - Math.min(...centers),
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
+  });
+  const phone = await measure();
+  expect(phone.width).toBeGreaterThanOrEqual(phone.fontSize * 2);
+  expect(phone.height).toBe(phone.width);
+  expect(phone.spread).toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const tablet = await measure();
+  expect(tablet.width).toBeGreaterThan(phone.width);
+  expect(tablet.width).toBeGreaterThanOrEqual(tablet.fontSize * 3);
+  expect(tablet.height).toBe(tablet.width);
+  expect(tablet.spread).toBeLessThanOrEqual(1);
+  expect(tablet.pageOverflow).toBe(false);
+});
+
 test("SE-sized keyboard viewport keeps media actions reachable after scrolling long content", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 240 });
   await openField(page, Array.from({ length: 30 }, (_, i) => `<p>Long content paragraph ${i}</p>`).join(""));
