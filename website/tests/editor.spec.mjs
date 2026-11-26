@@ -158,6 +158,22 @@ async function openField(page, content = "<p>Hello from the phone</p>", nativeDe
   await page.goto("/field.html");
 }
 
+test("native homepage links show the logical root when editing an old index link", async ({ page }) => {
+  await openField(page, '<p><a href="index.html"><em>Home</em></a></p>', { linkDetails: true });
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNode(field.querySelector("a"));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__linkDetailsRequest?.href)).toBe("/");
+  await page.evaluate(() => window.__replyLinkDetails({ href: "/", text: "Home" }));
+  await expect(field.locator("a")).toHaveAttribute("href", "/");
+  await expect(field.locator("em")).toHaveText("Home");
+});
+
 test("native link views preserve selection, formatted text, cancellation and removal", async ({ page }) => {
   await openField(page, "<p>Before <strong>our team</strong> after</p>", { linkDetails: true });
   const field = page.getByRole("textbox", { name: "Content", exact: true });
@@ -170,7 +186,7 @@ test("native link views preserve selection, formatted text, cancellation and rem
   await page.getByRole("button", { name: "Link", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__linkDetailsRequest?.text)).toBe("our team");
   expect(await page.evaluate(() => window.__linkDetailsRequest)).toMatchObject({
-    editing: false, textReadOnly: true, href: "", pages: expect.arrayContaining([expect.objectContaining({ href: "index.html" })]),
+    editing: false, textReadOnly: true, href: "", pages: expect.arrayContaining([expect.objectContaining({ href: "/" })]),
   });
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await field.evaluate((field) => getSelection().setBaseAndExtent(field, 0, field, 0));
@@ -482,10 +498,10 @@ test("native fields choose home/subpage links, edit and remove links, reject uns
   });
   await page.getByRole("button", { name: "Link", exact: true }).click();
   await expect(page.getByLabel("Page or subpage").locator('option[value="about/team/"]')).toHaveText("About / Team");
-  await page.getByLabel("Page or subpage").selectOption("index.html");
+  await page.getByLabel("Page or subpage").selectOption("/");
   await page.getByRole("button", { name: "Insert link", exact: true }).click();
-  await expect(field.locator("a")).toHaveAttribute("href", "index.html");
-  await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="index.html"');
+  await expect(field.locator("a")).toHaveAttribute("href", "/");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('href="/"');
   const selectLink = () => field.locator("a").evaluate((anchor) => {
     anchor.closest(".rich-editor").focus();
     getSelection().setBaseAndExtent(anchor.firstChild, 1, anchor.firstChild, 1);

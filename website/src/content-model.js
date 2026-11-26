@@ -120,16 +120,25 @@ export function sortedNews(news) {
 }
 
 const href = (route) => route.replace(/^\//, "");
-const rich = (html) => `<div class="stack rich-content">${html}</div>`;
+function rich(html, homeHref) {
+  // Sanitized rich text has quoted attributes; consume whole attributes, including titles.
+  const content = homeHref ? html.replace(/<a\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, (tag) =>
+    tag.replace(/(\s+)([\w:-]+)(\s*=\s*)(["'])([\s\S]*?)\4/g, (attribute, space, name, equals, quote, value) => {
+      if (name.toLowerCase() !== "href") return attribute;
+      const home = /^(?:\/|(?:\.\/)?index\.html)([?#].*)?$/.exec(value);
+      return home ? `${space}${name}${equals}${quote}${escapeHtml(homeHref)}${home[1] ?? ""}${quote}` : attribute;
+    })) : html;
+  return `<div class="stack rich-content">${content}</div>`;
+}
 
-function withAsides(content, asides, catalog) {
+function withAsides(content, asides, catalog, homeHref) {
   if (!asides.length) return content;
   const source = catalog.components.find((item) => item.id === "aside")?.source;
   if (!source) throw new Error("The aside component is missing.");
   return `<div class="with-sidebar with-sidebar:right">
     <div class="stack content-main">${content}</div>
     <div class="stack content-asides">${asides.map((aside) => render(source,
-      { heading: aside.heading }, `${aside.heading ? `<h3>${escapeHtml(aside.heading)}</h3>` : ""}${rich(aside.content)}`)).join("\n")}</div>
+      { heading: aside.heading }, `${aside.heading ? `<h3>${escapeHtml(aside.heading)}</h3>` : ""}${rich(aside.content, homeHref)}`)).join("\n")}</div>
   </div>`;
 }
 
@@ -147,13 +156,13 @@ function coverMarkup(record, media) {
   return image ? rich(`<figure class="stack cover-image"><img src="media/${escapeHtml(image.filename)}" alt="${escapeHtml(record.coverAlt ?? "")}"></figure>`) : "";
 }
 
-function body(record, catalog, media) {
+function body(record, catalog, media, homeHref) {
   const source = catalog.components.find((item) => item.id === "section")?.source;
   if (record.sections.length && !source) throw new Error("The section component is missing.");
   const usedIds = new Set();
   const sections = record.sections.map((section) => renderSection(source, section,
-    withAsides(rich(section.content), section.asides, catalog), usedIds)).join("\n");
-  return coverMarkup(record, media) + withAsides(`${rich(record.content ?? record.shortContent)}${sections}`, record.asides, catalog);
+    withAsides(rich(section.content, homeHref), section.asides, catalog, homeHref), usedIds)).join("\n");
+  return coverMarkup(record, media) + withAsides(`${rich(record.content ?? record.shortContent, homeHref)}${sections}`, record.asides, catalog, homeHref);
 }
 
 function menu(pages, activeId, currentId, homeId) {
@@ -198,7 +207,7 @@ export function renderSite(project, catalog, options = {}) {
   const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
   const home = homeEntry?.record;
   const pageContent = (entry) => {
-    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog, project.media));
+    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog, project.media, homeHref));
     const aside = subpageNavigation(entry, home?.id);
     return aside ? `<div class="with-sidebar with-sidebar:right"><div class="stack content-main">${article}</div>${aside}</div>` : article;
   };
@@ -227,11 +236,11 @@ export function renderSite(project, catalog, options = {}) {
   for (const item of news) {
     const file = `news/${item.date}/${item.slug}/index.html`;
     files.push({ path: file, html: document(item.title,
-      render(template("news"), item, body(item, catalog, project.media)), file) });
+      render(template("news"), item, body(item, catalog, project.media, homeHref)), file) });
   }
   const articles = news.slice(0, 3).map((item) => `<article class="stack news-summary">
     <header class="stack"><h2><a href="news/${item.date}/${item.slug}/">${escapeHtml(item.title)}</a></h2>
-    <time datetime="${item.date}">${item.date}</time></header>${coverMarkup(item, project.media)}${rich(item.shortContent)}</article>`).join("\n");
+    <time datetime="${item.date}">${item.date}</time></header>${coverMarkup(item, project.media)}${rich(item.shortContent, homeHref)}</article>`).join("\n");
   const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
   files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
   const homepage = homeEntry ? pageContent(homeEntry) : listing;

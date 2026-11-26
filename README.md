@@ -242,8 +242,9 @@ choose **Save publishing settings**. Use `/` for a domain-root website and leave
 the upload subfolder blank to publish directly into the QR's saved destination.
 For a nested deployment, the public prefix is its full public path (for example
 `/site/`), while the upload subfolder is relative to the saved FTP/SFTP directory
-(for example `site`). A blank public prefix uses relative home links. Publishing
-uses these settings; exports and previews stay portable. Settings are kept with
+(for example `site`). Homepage links show and store `/`; publishing resolves them
+and older `index.html` links to the configured prefix. A blank public prefix uses
+relative home links. Publishing uses these settings; exports and previews stay portable. Settings are kept with
 secured hosting credentials, not in the content database or exported website.
 The Rsbuild catalog at `/` is separate from its generated example site, whose
 homepage is `/home.html`; example logos return there rather than to the catalog.

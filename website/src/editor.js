@@ -366,13 +366,13 @@ export function richEditor(record, key, labelText, options = {}) {
     const selectedText = linkRange.toString();
     const linkProject = options.getLinkProject ? await options.getLinkProject() : contentProject;
     const configuration = {
-      href: current?.getAttribute("href") ?? "",
+      href: (current?.getAttribute("href") ?? "").replace(/^(?:\.\/)?index\.html$/, "/"),
       text: current?.textContent ?? selectedText,
       editing: Boolean(current),
       textReadOnly: Boolean(selectedText) && !current,
       pages: pageRoutes(linkProject.pages ?? []).map((entry) => ({
         title: [...entry.ancestors, entry.record].map((page) => page.menuTitle || page.title).join(" / "),
-        href: entry.record.id === (linkProject.homePageId ?? linkProject.pages?.[0]?.id) ? "index.html" : entry.route.slice(1),
+        href: entry.record.id === (linkProject.homePageId ?? linkProject.pages?.[0]?.id) ? "/" : entry.route.slice(1),
       })),
     };
     const details = await (options.getLinkDetails?.(configuration) ?? linkDetails(configuration));

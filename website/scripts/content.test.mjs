@@ -299,6 +299,46 @@ test("an explicit public URL prefix controls home links without changing content
   assert.throws(() => renderSite(project, catalog, { publicPathPrefix: "/host/../private/" }));
 });
 
+test("rich homepage links resolve to the publishing root without changing stored content", () => {
+  const project = normalize(input);
+  const markup = sanitizeRichText(`<p><a href="/" title="literal
+ href='/'">Home</a> <a href="index.html#details">Legacy home</a>
+ <a href="/?search=one&amp;two=2">Search</a>
+ <a href="about/">Page</a> <a href="/other/">Other root</a>
+ <a href="https://example.org/index.html">External</a> Literal href='/'</p>`);
+  for (const entry of pageRoutes(project.pages)) {
+    entry.record.content = markup;
+    entry.record.asides = [{ heading: "", content: markup }];
+    entry.record.sections = [{ heading: "Section", content: markup, asides: [{ heading: "", content: markup }] }];
+  }
+  for (const item of project.news) { item.content = markup; item.shortContent = markup; }
+  const original = JSON.stringify(project);
+  for (const [options, homeHref] of [
+    [{ publicPathPrefix: "/host/site/" }, "/host/site/"],
+    [{ publicPathPrefix: "/" }, "/"],
+    [{}, "./"],
+    [{ homeHref: "home.html" }, "home.html"],
+  ]) {
+    for (const file of renderSite(project, catalog, options)) {
+      const document = new JSDOM(file.html, { url: `http://example.test/host/site/${file.path}` }).window.document;
+      const blocks = [...document.querySelectorAll(".rich-content")].filter((block) => block.querySelector("a"));
+      assert.ok(blocks.length);
+      for (const block of blocks) {
+        const links = [...block.querySelectorAll("a")];
+        assert.equal(links[0].getAttribute("href"), homeHref);
+        assert.equal(links[0].getAttribute("title"), "literal\n href='/'");
+        assert.equal(links[1].getAttribute("href"), `${homeHref}#details`);
+        assert.equal(links[2].getAttribute("href"), `${homeHref}?search=one&two=2`);
+        assert.equal(links[3].getAttribute("href"), "about/");
+        assert.equal(links[4].getAttribute("href"), "/other/");
+        assert.equal(links[5].getAttribute("href"), "https://example.org/index.html");
+        assert.match(block.textContent, /Literal href='\/'/);
+      }
+    }
+  }
+  assert.equal(JSON.stringify(project), original);
+});
+
 test("Rsbuild example home links stay in the example site rather than returning to the catalog", () => {
   for (const file of renderSite(normalize(input), catalog, { homeHref: "home.html" })) {
     const document = new JSDOM(file.html, { url: `http://example.test/${file.path}` }).window.document;

@@ -27,15 +27,15 @@ class LinkDetailsTest {
     @Test
     fun choosingPageFillsURLAndTextAndSavesNativeResult() {
         var result: JSONObject? = null
-        val details = JSONObject().put("pages", JSONArray().put(JSONObject().put("title", "Home").put("href", "index.html")))
-        compose.setContent { MaterialTheme { LinkDetails(details, { href, completion -> completion(href == "index.html") }, { result = it }) } }
+        val details = JSONObject().put("pages", JSONArray().put(JSONObject().put("title", "Home").put("href", "/")))
+        compose.setContent { MaterialTheme { LinkDetails(details, { href, completion -> completion(href == "/") }, { result = it }) } }
         compose.onNodeWithText("Enter a URL").performClick()
         compose.onNodeWithText("Home").performClick()
-        compose.onNodeWithText("Link URL").assertTextContains("index.html")
+        compose.onNodeWithText("Link URL").assertTextContains("/")
         compose.onNodeWithText("Link text").assertTextContains("Home")
         compose.onNode(hasText("Insert link") and hasClickAction()).performClick()
         compose.runOnIdle {
-            assertEquals("index.html", result?.getString("href"))
+            assertEquals("/", result?.getString("href"))
             assertEquals("Home", result?.getString("text"))
         }
     }
