@@ -21,6 +21,7 @@ final class ContentStore: @unchecked Sendable {
         bundleRoot = bundled
         websiteRoot = support.appendingPathComponent("Website", isDirectory: true)
         mediaDirectory = websiteRoot.appendingPathComponent("media", isDirectory: true)
+        try Self.recoverInterruptedRestore(support: support, media: mediaDirectory)
         try files.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
         // Only bundled resources are refreshed; the media folder and database are never replaced.
         for resource in try files.contentsOfDirectory(at: bundled, includingPropertiesForKeys: nil) where resource.lastPathComponent != "media" {
@@ -92,14 +93,117 @@ final class ContentStore: @unchecked Sendable {
 
     func templateSources() throws -> Data? {
         try queue.sync {
-            try (rows("SELECT value FROM metadata WHERE key = 'template_sources'").first?["value"] as? String)?.data(using: .utf8)
+            guard let sources = try templateSourceFiles() else { return nil }
+            return try JSONSerialization.data(withJSONObject: sources)
         }
     }
 
     func saveTemplateSources(_ data: Data) throws {
         try queue.sync {
-            try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
-                        [String(decoding: data, as: UTF8.self)])
+            try transaction { try writeTemplateSources(data) }
+        }
+    }
+
+    private func metadata(_ key: String) throws -> String? {
+        try rows("SELECT value FROM metadata WHERE key = ?", [key]).first?["value"] as? String
+    }
+
+    private func templateSourceFiles() throws -> [String: String]? {
+        guard let index = try metadata("template_source_index") else {
+            guard let source = try metadata("template_sources") else { return nil }
+            return try JSONDecoder().decode([String: String].self, from: Data(source.utf8))
+        }
+        let paths = try JSONDecoder().decode([String].self, from: Data(index.utf8))
+        guard paths.count <= 1024 else { throw ContentError.invalid("Invalid stored templates.") }
+        var sources: [String: String] = [:]
+        for path in paths {
+            guard let source = try metadata("template_source/\(path)") else { throw ContentError.invalid("Stored template is missing.") }
+            sources[path] = source
+        }
+        return sources
+    }
+
+    private func writeTemplateSources(_ data: Data) throws {
+        let sources = try JSONDecoder().decode([String: String].self, from: data)
+        guard sources.count <= 1024 else { throw ContentError.invalid("Too many templates.") }
+        try execute("DELETE FROM metadata WHERE key IN ('template_sources', 'template_source_index') OR key LIKE 'template_source/%'")
+        for (path, source) in sources {
+            guard path.range(of: "^webeasy_templates/(templates|components)/[a-z][a-z0-9-]*\\.html$", options: .regularExpression) != nil,
+                  source.utf8.count <= 256 * 1024 else { throw ContentError.invalid("Invalid or oversized template.") }
+            try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ["template_source/\(path)", source])
+        }
+        let index = try JSONEncoder().encode(sources.keys.sorted())
+        try execute("INSERT INTO metadata (key, value) VALUES ('template_source_index', ?)", [String(decoding: index, as: UTF8.self)])
+    }
+
+    private struct StoredAsset: Codable {
+        let size: Int
+        let chunks: Int
+    }
+    private static let assetChunkSize = 256 * 1024
+
+    private func assetFiles() throws -> [String: Data] {
+        guard let value = try metadata("asset_overrides") else { return [:] }
+        let index = try JSONDecoder().decode([String: StoredAsset].self, from: Data(value.utf8))
+        guard index.count <= 1024 else { throw ContentError.invalid("Too many stored website assets.") }
+        var files: [String: Data] = [:]
+        var total = 0
+        for (path, entry) in index {
+            guard CustomizationAssets.validPath(path), (0...CustomizationAssets.maximumFileBytes).contains(entry.size),
+                  entry.chunks == (entry.size + Self.assetChunkSize - 1) / Self.assetChunkSize else {
+                throw ContentError.invalid("Invalid stored website asset.")
+            }
+            total += entry.size
+            guard total <= CustomizationAssets.maximumTotalBytes else { throw ContentError.invalid("Stored website assets are too large.") }
+            var data = Data()
+            for chunk in 0..<entry.chunks {
+                guard let encoded = try metadata("asset_chunk/\(path)/\(chunk)"), let bytes = Data(base64Encoded: encoded),
+                      bytes.count <= Self.assetChunkSize, data.count + bytes.count <= entry.size else {
+                    throw ContentError.invalid("Stored website asset is missing.")
+                }
+                data.append(bytes)
+            }
+            guard data.count == entry.size else { throw ContentError.invalid("Stored website asset is incomplete.") }
+            files[path] = data
+        }
+        return files
+    }
+
+    func customizationFiles() throws -> [String: Data] {
+        try queue.sync {
+            let catalog = try Catalog.load()
+            let sources = try templateSourceFiles() ?? [:]
+            var result: [String: Data] = [:]
+            for (group, entries) in [("templates", catalog.templates), ("components", catalog.components)] {
+                for entry in entries {
+                    let path = "webeasy_templates/\(group)/\(entry.id).html"
+                    result[path] = Data((sources[path] ?? entry.source).utf8)
+                }
+            }
+            for path in CustomizationAssets.bundled { result[path] = try Data(contentsOf: bundleRoot.appendingPathComponent(path)) }
+            result.merge(try assetFiles(), uniquingKeysWith: { _, new in new })
+            return result
+        }
+    }
+
+    func saveCustomization(_ sources: Data, assets: [String: Data]) throws {
+        try CustomizationAssets.validate(assets)
+        try queue.sync {
+            try transaction {
+                try writeTemplateSources(sources)
+                try execute("DELETE FROM metadata WHERE key = 'asset_overrides' OR key LIKE 'asset_chunk/%'")
+                var index: [String: StoredAsset] = [:]
+                for (path, bytes) in assets {
+                    let chunks = (bytes.count + Self.assetChunkSize - 1) / Self.assetChunkSize
+                    for chunk in 0..<chunks {
+                        let data = bytes.subdata(in: (chunk * Self.assetChunkSize)..<min(bytes.count, (chunk + 1) * Self.assetChunkSize))
+                        try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ["asset_chunk/\(path)/\(chunk)", data.base64EncodedString()])
+                    }
+                    index[path] = StoredAsset(size: bytes.count, chunks: chunks)
+                }
+                let data = try JSONEncoder().encode(index)
+                try execute("INSERT INTO metadata (key, value) VALUES ('asset_overrides', ?)", [String(decoding: data, as: UTF8.self)])
+            }
         }
     }
 
@@ -283,13 +387,173 @@ final class ContentStore: @unchecked Sendable {
     }
 
     func project() throws -> [String: Any] {
+        try queue.sync { try readProject() }
+    }
+
+    private func readProject() throws -> [String: Any] {
+        let records = try pages(parent: nil)
+        let home = try rows("SELECT value FROM metadata WHERE key = ?", ["home_page_id"]).first?["value"] as? String
+            ?? records.first?["id"] as? String
+        return ["version": 1, "homePageId": home.map { $0 as Any } ?? NSNull(), "pages": records,
+         "news": try rows("SELECT id, title, slug, date, content, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
+         "media": try rows("SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id")]
+    }
+
+    private struct RestoreRecord: Codable {
+        let recovery: String
+    }
+
+    private static func databaseFiles(_ support: URL) -> [URL] {
+        ["webeasy.sqlite", "webeasy.sqlite-journal", "webeasy.sqlite-wal", "webeasy.sqlite-shm"]
+            .map { support.appendingPathComponent($0) }
+    }
+
+    private static func recoverInterruptedRestore(support: URL, media: URL) throws {
+        let files = FileManager.default
+        let marker = support.appendingPathComponent("webeasy-restore.json")
+        guard files.fileExists(atPath: marker.path) else { return }
+        let record = try JSONDecoder().decode(RestoreRecord.self, from: Data(contentsOf: marker))
+        guard record.recovery.range(of: "^restore-recovery-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                                    options: .regularExpression) != nil else {
+            throw ContentError.invalid("Invalid restore recovery record.")
+        }
+        let recovery = support.appendingPathComponent(record.recovery, isDirectory: true)
+        guard files.fileExists(atPath: recovery.appendingPathComponent("webeasy.sqlite").path),
+              files.fileExists(atPath: recovery.appendingPathComponent("media").path) else {
+            throw ContentError.invalid("Original data remains in recovery storage; automatic recovery cannot finish.")
+        }
+        for file in databaseFiles(support) where files.fileExists(atPath: file.path) { try files.removeItem(at: file) }
+        try files.copyItem(at: recovery.appendingPathComponent("webeasy.sqlite"), to: support.appendingPathComponent("webeasy.sqlite"))
+        if files.fileExists(atPath: media.path) { try files.removeItem(at: media) }
+        try files.copyItem(at: recovery.appendingPathComponent("media"), to: media)
+        try files.removeItem(at: marker)
+        try? files.removeItem(at: recovery)
+    }
+
+    private func validateSnapshot(_ directory: URL) throws {
+        var snapshot: OpaquePointer?
+        guard sqlite3_open_v2(directory.appendingPathComponent("webeasy.sqlite").path, &snapshot,
+                             SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            sqlite3_close(snapshot)
+            throw ContentError.invalid("Cannot read backup database.")
+        }
+        let previous = database
+        database = snapshot
+        defer { database = previous; sqlite3_close(snapshot) }
+        guard try rows("PRAGMA user_version").first?["user_version"] as? Int == 4,
+              try rows("PRAGMA quick_check").first?.values.first as? String == "ok",
+              try rows("PRAGMA foreign_key_check").isEmpty else {
+            throw ContentError.invalid("Backup database is damaged or unsupported.")
+        }
+        let required: Set<String> = ["metadata", "pages", "news", "sections", "asides", "media"]
+        var tables: Set<String> = []
+        for row in try rows("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'trigger')") {
+            guard let name = row["name"] as? String, row["type"] as? String == "table",
+                  required.contains(name) || name == "android_metadata" || name.hasPrefix("sqlite_") else {
+                throw ContentError.invalid("Unexpected backup database schema.")
+            }
+            tables.insert(name)
+        }
+        guard required.isSubset(of: tables) else { throw ContentError.invalid("Incomplete backup database.") }
+        for row in try rows("SELECT filename, size FROM media") {
+            guard let name = row["filename"] as? String, let size = row["size"] as? Int else {
+                throw ContentError.invalid("Invalid backup media record.")
+            }
+            let file = try DirectoryTools.safeFile(directory, "media/" + name)
+            let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true, values.fileSize == size else {
+                throw ContentError.invalid("Backup media is missing or damaged.")
+            }
+        }
+        _ = try readProject()
+        _ = try templateSourceFiles()
+        _ = try assetFiles()
+    }
+
+    private func snapshotUnlocked() throws -> URL {
+        let files = FileManager.default
+        let directory = files.temporaryDirectory.appendingPathComponent("webeasy-snapshot-\(UUID())", isDirectory: true)
+        try files.createDirectory(at: directory, withIntermediateDirectories: false)
+        do {
+            var target: OpaquePointer?
+            guard sqlite3_open_v2(directory.appendingPathComponent("webeasy.sqlite").path, &target,
+                                 SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+                sqlite3_close(target)
+                throw ContentError.invalid("Cannot create database snapshot.")
+            }
+            defer { sqlite3_close(target) }
+            guard let backup = sqlite3_backup_init(target, "main", database, "main") else {
+                throw ContentError.invalid("Cannot snapshot the current database.")
+            }
+            let copied = sqlite3_backup_step(backup, -1)
+            let finished = sqlite3_backup_finish(backup)
+            guard copied == SQLITE_DONE, finished == SQLITE_OK,
+                  sqlite3_exec(target, "PRAGMA journal_mode = DELETE", nil, nil, nil) == SQLITE_OK else {
+                throw ContentError.invalid("Database snapshot was not completed. Try again.")
+            }
+            if let enumerator = files.enumerator(at: mediaDirectory, includingPropertiesForKeys: [.isSymbolicLinkKey]) {
+                for case let file as URL in enumerator {
+                    guard try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                        throw ContentError.invalid("Media contains an unsupported symbolic link.")
+                    }
+                }
+            }
+            try files.copyItem(at: mediaDirectory, to: directory.appendingPathComponent("media", isDirectory: true))
+            try validateSnapshot(directory)
+            return directory
+        } catch { try? files.removeItem(at: directory); throw error }
+    }
+
+    func backupSnapshot() throws -> URL { try queue.sync { try snapshotUnlocked() } }
+
+    private func openRestoredDatabase(_ support: URL) throws {
+        guard sqlite3_open_v2(support.appendingPathComponent("webeasy.sqlite").path, &database,
+                             SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            sqlite3_close(database); database = nil
+            throw ContentError.invalid("Cannot open the restored database.")
+        }
+        try execute("PRAGMA foreign_keys = ON")
+    }
+
+    func restoreSnapshot(_ directory: URL) throws {
         try queue.sync {
-            let records = try pages(parent: nil)
-            let home = try rows("SELECT value FROM metadata WHERE key = ?", ["home_page_id"]).first?["value"] as? String
-                ?? records.first?["id"] as? String
-            return ["version": 1, "homePageId": home.map { $0 as Any } ?? NSNull(), "pages": records,
-             "news": try rows("SELECT id, title, slug, date, content, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, short_content AS shortContent FROM news ORDER BY date DESC, slug").map { try related($0, owner: "news") },
-             "media": try rows("SELECT id, filename, mime_type AS mimeType, original_name AS originalName, size FROM media ORDER BY id")]
+            try validateSnapshot(directory)
+            let files = FileManager.default
+            let support = websiteRoot.deletingLastPathComponent()
+            let marker = support.appendingPathComponent("webeasy-restore.json")
+            if files.fileExists(atPath: marker.path) {
+                sqlite3_close(database); database = nil
+                try Self.recoverInterruptedRestore(support: support, media: mediaDirectory)
+                try openRestoredDatabase(support)
+            }
+            let snapshot = try snapshotUnlocked()
+            let recovery = support.appendingPathComponent("restore-recovery-\(UUID().uuidString.lowercased())", isDirectory: true)
+            do {
+                try files.moveItem(at: snapshot, to: recovery)
+                try JSONEncoder().encode(RestoreRecord(recovery: recovery.lastPathComponent)).write(to: marker, options: .atomic)
+                let record = try FileHandle(forWritingTo: marker)
+                try record.synchronize(); try record.close()
+            } catch {
+                try? files.removeItem(at: snapshot)
+                if !files.fileExists(atPath: marker.path) { try? files.removeItem(at: recovery) }
+                throw error
+            }
+            sqlite3_close(database); database = nil
+            do {
+                for file in Self.databaseFiles(support) where files.fileExists(atPath: file.path) { try files.removeItem(at: file) }
+                if files.fileExists(atPath: mediaDirectory.path) { try files.removeItem(at: mediaDirectory) }
+                try files.copyItem(at: directory.appendingPathComponent("webeasy.sqlite"), to: support.appendingPathComponent("webeasy.sqlite"))
+                try files.copyItem(at: directory.appendingPathComponent("media"), to: mediaDirectory)
+                try openRestoredDatabase(support)
+                _ = try readProject(); _ = try templateSourceFiles(); _ = try assetFiles()
+                try files.removeItem(at: marker)
+                try? files.removeItem(at: recovery)
+            } catch {
+                sqlite3_close(database); database = nil
+                try Self.recoverInterruptedRestore(support: support, media: mediaDirectory)
+                try openRestoredDatabase(support)
+                throw error
+            }
         }
     }
 
@@ -432,6 +696,7 @@ final class ContentStore: @unchecked Sendable {
                 try files.copyItem(at: source, to: target)
             }
             do {
+                let assets = try assetFiles()
                 for document in documents {
                     let path = try text(document, "path", required: true)
                     guard path.hasSuffix(".html") else { throw ContentError.invalid("Invalid exported document.") }
@@ -439,13 +704,17 @@ final class ContentStore: @unchecked Sendable {
                     try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try text(document, "html").write(to: target, atomically: true, encoding: .utf8)
                 }
-                for path in ["assets/site.css", "assets/site.js", "assets/logo.svg"] + references {
+                for path in Set(["assets/site.css", "assets/site.js", "assets/logo.svg"] + references + Array(assets.keys)) {
                     guard path.hasPrefix("assets/") || path.hasPrefix("media/") else { throw ContentError.invalid("Invalid media reference.") }
                     if path.hasPrefix("media/"),
                        try rows("SELECT id FROM media WHERE filename = ?", [String(path.dropFirst(6))]).isEmpty {
                         throw ContentError.invalid("Referenced media is missing.")
                     }
-                    try copy(Self.safeFile(websiteRoot, path), path)
+                    if let data = assets[path] {
+                        let target = try Self.safeFile(directory, path)
+                        try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try data.write(to: target, options: .atomic)
+                    } else { try copy(Self.safeFile(websiteRoot, path), path) }
                 }
                 return directory
             } catch { try? files.removeItem(at: directory); throw error }

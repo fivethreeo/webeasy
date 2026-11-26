@@ -51,6 +51,10 @@ jobs:
       - run: npm run package:website
       - name: Test website file paths
         run: |
+          swiftc -swift-version 6 apps/ios/Sources/ContentSlugs.swift apps/ios/Tests/ContentSlugsTests.swift -o "$RUNNER_TEMP/webeasy-slug-tests"
+          swiftc -swift-version 6 apps/ios/Sources/ContentError.swift apps/ios/Sources/CustomizationAssets.swift apps/ios/Sources/DirectoryTools.swift apps/ios/Tests/DirectoryToolsTests.swift -o "$RUNNER_TEMP/webeasy-directory-tests"
+          "$RUNNER_TEMP/webeasy-directory-tests"
+          "$RUNNER_TEMP/webeasy-slug-tests"
           swiftc -swift-version 6 apps/ios/Sources/WebsiteFiles.swift apps/ios/Tests/WebsiteFilesTests.swift -o "$RUNNER_TEMP/webeasy-file-tests"
           "$RUNNER_TEMP/webeasy-file-tests"
           swiftc -swift-version 6 apps/ios/Sources/PublishingOperation.swift apps/ios/Sources/PublishingPaths.swift apps/ios/Tests/PublishingOperationTests.swift -o "$RUNNER_TEMP/webeasy-publishing-tests"

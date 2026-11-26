@@ -39,6 +39,63 @@ class ContentStoreTest {
     fun tearDown() { store.close() }
 
     @Test
+    fun backupRestoresDatabaseMediaAndCustomizationTogether() {
+        val project = store.project()
+        project.getJSONArray("pages").getJSONObject(0).put("title", "Backed up title")
+        store.save(project)
+        val assets = mapOf("assets/site.css" to "custom css".toByteArray(),
+            "assets/site.js" to byteArrayOf(), "assets/logo.svg" to "<svg/>".toByteArray())
+        store.saveCustomization(JSONObject().put("webeasy_templates/templates/master.html", "{{title}}"), assets)
+        java.io.File(store.mediaDirectory, "owned.bin").writeBytes(byteArrayOf(7, 8, 9))
+        val snapshot = store.backupSnapshot()
+        try {
+            project.getJSONArray("pages").getJSONObject(0).put("title", "Later title")
+            store.save(project)
+            java.io.File(store.mediaDirectory, "owned.bin").writeText("Later bytes")
+            store.restoreSnapshot(snapshot)
+            store.close()
+            store = ContentStore(context)
+            assertEquals("Backed up title", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+            assertEquals("{{title}}", store.templateSources()!!.getString("webeasy_templates/templates/master.html"))
+            assertArrayEquals(assets.getValue("assets/site.css"), store.assetFiles().getValue("assets/site.css"))
+            assertArrayEquals(byteArrayOf(7, 8, 9), java.io.File(store.mediaDirectory, "owned.bin").readBytes())
+        } finally { snapshot.deleteRecursively() }
+    }
+
+    @Test
+    fun invalidBackupDoesNotChangeCurrentDatabaseOrMedia() {
+        val before = store.project().toString()
+        java.io.File(store.mediaDirectory, "owned.bin").writeText("Keep this")
+        val snapshot = store.backupSnapshot()
+        try {
+            java.io.File(snapshot, "webeasy.sqlite").writeText("Not SQLite")
+            assertThrows(Exception::class.java) { store.restoreSnapshot(snapshot) }
+            assertEquals(before, store.project().toString())
+            assertEquals("Keep this", java.io.File(store.mediaDirectory, "owned.bin").readText())
+        } finally { snapshot.deleteRecursively() }
+    }
+
+    @Test
+    fun startupRecoversInterruptedRestoreEvenWhenDatabaseWasAlreadyMovedBackBeforeAnotherCrash() {
+        val expected = store.project().toString()
+        java.io.File(store.mediaDirectory, "owned.bin").writeText("Original media")
+        val snapshot = store.backupSnapshot()
+        store.close()
+        val recovery = java.io.File(context.filesDir, "restore-recovery-${java.util.UUID.randomUUID()}")
+        assertTrue(snapshot.renameTo(recovery))
+        java.io.File(context.filesDir, "webeasy-restore.json").writeText(
+            JSONObject().put("recovery", recovery.name).toString())
+        context.deleteDatabase("webeasy.sqlite")
+        assertTrue(java.io.File(recovery, "webeasy.sqlite").renameTo(context.getDatabasePath("webeasy.sqlite")))
+        java.io.File(store.mediaDirectory, "owned.bin").writeText("Partially restored media")
+        store = ContentStore(context)
+        assertEquals(expected, store.project().toString())
+        assertEquals("Original media", java.io.File(store.mediaDirectory, "owned.bin").readText())
+        assertFalse(java.io.File(context.filesDir, "webeasy-restore.json").exists())
+        assertFalse(recovery.exists())
+    }
+
+    @Test
     fun seedsOwnedContentAndReopeningPreservesChangesAndDeletion() {
         val project = store.project()
         val page = project.getJSONArray("pages").getJSONObject(0)
@@ -86,6 +143,32 @@ class ContentStoreTest {
     }
 
     @Test
+    fun resolvingNewSlugConflictsSavesAndReopensWithoutChangingExistingRoutes() {
+        val project = store.project()
+        val drafts = ContentDrafts()
+        drafts.markSaved(drafts.capture(project))
+        val pages = project.getJSONArray("pages")
+        val news = project.getJSONArray("news")
+        val originalPage = pages.getJSONObject(0).getString("slug")
+        val originalNews = news.getJSONObject(0).getString("slug")
+        fun duplicate(items: JSONArray, id: String) {
+            items.put(JSONObject(items.getJSONObject(0).toString()).put("id", id)
+                .put("children", JSONArray()).put("sections", JSONArray()).put("asides", JSONArray()))
+        }
+        duplicate(pages, "new-page")
+        duplicate(news, "new-news")
+        fun records(items: JSONArray) = (0 until items.length()).map { items.getJSONObject(it) }
+        assertTrue(ContentSlugs.resolve(records(pages), drafts::isSaved, rootPage = true))
+        assertTrue(ContentSlugs.resolve(records(news), drafts::isSaved, news = true))
+        store.save(project)
+        store.close(); store = ContentStore(context)
+        val saved = store.project()
+        assertEquals(originalPage, saved.getJSONArray("pages").getJSONObject(0).getString("slug"))
+        assertEquals("$originalPage-2", records(saved.getJSONArray("pages")).first { it.getString("id") == "new-page" }.getString("slug"))
+        assertEquals("$originalNews-2", records(saved.getJSONArray("news")).first { it.getString("id") == "new-news" }.getString("slug"))
+    }
+
+    @Test
     fun downloadedTemplatesPersistAcrossContentSavesAndAppReopening() {
         assertNull(store.templateSources())
         val sources = JSONObject().put("webeasy_templates/templates/master.html", "<html>Edited{{{content}}}</html>")
@@ -96,6 +179,66 @@ class ContentStoreTest {
         store.close(); store = ContentStore(context)
         assertEquals(sources.toString(), store.templateSources().toString())
         assertEquals("Content changed", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+    }
+
+    @Test
+    fun customizationAssetsAndSourcesSurviveSavesAndLargeFilesFitCursorWindows() {
+        val files = store.customizationFiles()
+        val sources = JSONObject()
+        files.filterKeys { it.startsWith("webeasy_templates/") }.forEach { (path, bytes) -> sources.put(path, bytes.toString(Charsets.UTF_8)) }
+        sources.put("webeasy_templates/components/site-footer.html", "<footer>Customized footer</footer>")
+        val assets = files.filterKeys { it.startsWith("assets/") }.toMutableMap()
+        val font = ByteArray(3 * 1024 * 1024) { (it % 251).toByte() }
+        assets["assets/fonts/custom.woff2"] = font
+        assets["assets/site.css"] = "body { color: green; }".toByteArray()
+        store.saveCustomization(sources, assets)
+        store.save(store.project())
+        store.close(); store = ContentStore(context)
+        assertEquals("<footer>Customized footer</footer>", store.templateSources()!!.getString("webeasy_templates/components/site-footer.html"))
+        assertArrayEquals(font, store.assetFiles()["assets/fonts/custom.woff2"])
+        val site = store.prepareSite(JSONArray().put(JSONObject().put("path", "index.html").put("html", "<h1>Customized</h1>")), JSONArray())
+        try {
+            assertEquals("body { color: green; }", java.io.File(site, "assets/site.css").readText())
+            assertArrayEquals(font, java.io.File(site, "assets/fonts/custom.woff2").readBytes())
+            assertFalse(java.io.File(site, "assets/generator.js").exists())
+            assertFalse(java.io.File(site, "webeasy_templates").exists())
+        } finally { site.deleteRecursively() }
+    }
+
+    @Test
+    fun importingInvalidAssetsCannotReplaceCurrentCustomization() {
+        val files = store.customizationFiles()
+        val sources = JSONObject().put("webeasy_templates/components/site-footer.html", "<footer>Kept</footer>")
+        val assets = files.filterKeys { it.startsWith("assets/") }
+        store.saveCustomization(sources, assets)
+        val invalid = assets + ("assets/generator.js" to "Untrusted editor replacement".toByteArray())
+        assertThrows(IllegalArgumentException::class.java) {
+            store.saveCustomization(JSONObject().put("webeasy_templates/components/site-footer.html", "<footer>Changed</footer>"), invalid)
+        }
+        assertEquals("<footer>Kept</footer>", store.templateSources()!!.getString("webeasy_templates/components/site-footer.html"))
+        assertFalse(store.assetFiles().containsKey("assets/generator.js"))
+        for (path in listOf("assets/../field.js", "assets//site.css", "assets/.hidden/../../outside", "/assets/site.css")) {
+            assertFalse(CustomizationAssets.validPath(path))
+        }
+    }
+
+    @Test
+    fun largeTemplateCollectionsUseIndividualRowsAndLegacySourcesStillLoad() {
+        val path = "webeasy_templates/components/site-footer.html"
+        writableLegacyTemplate(path)
+        assertEquals("Legacy source", store.templateSources()!!.getString(path))
+        val sources = JSONObject()
+        for (index in 0 until 12) sources.put("webeasy_templates/components/custom-$index.html", "x".repeat(220000))
+        store.saveTemplateSources(sources)
+        store.close(); store = ContentStore(context)
+        val restored = store.templateSources()!!
+        assertEquals(12, restored.length())
+        assertEquals(sources.getString("webeasy_templates/components/custom-11.html"), restored.getString("webeasy_templates/components/custom-11.html"))
+    }
+
+    private fun writableLegacyTemplate(path: String) {
+        store.writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
+            arrayOf(JSONObject().put(path, "Legacy source").toString()))
     }
 
     @Test

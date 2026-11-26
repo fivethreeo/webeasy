@@ -17,6 +17,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
 import java.time.LocalDate
+import java.util.Base64
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -24,21 +25,65 @@ import kotlin.math.roundToInt
 
 class ContentStore(private val context: Context) :
     SQLiteOpenHelper(context, "webeasy.sqlite", null, 4) {
-    val mediaDirectory = File(context.filesDir, "Media").apply { mkdirs() }
+    val mediaDirectory = File(context.filesDir, "Media")
+    private var swapping = false
+
+    override fun getWritableDatabase(): SQLiteDatabase = openDatabase(true)
+    override fun getReadableDatabase(): SQLiteDatabase = openDatabase(false)
+
+    private fun openDatabase(writable: Boolean): SQLiteDatabase = synchronized(restoreLock) {
+        if (!swapping && File(context.filesDir, "webeasy-restore.json").exists()) {
+            super.close()
+            recoverInterruptedRestore()
+        }
+        if (writable) super.getWritableDatabase() else super.getReadableDatabase()
+    }
+
+    internal fun <T> restoreOperation(operation: () -> T): T = synchronized(restoreLock) { operation() }
 
     init {
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            if (rows(db, "SELECT value FROM metadata WHERE key = ?", arrayOf("seeded")).length() == 0) {
-                val seed = JSONObject(context.assets.open("website/content.json").bufferedReader().use { it.readText() })
-                writeContent(db, seed)
-                db.execSQL("INSERT INTO metadata (key, value) VALUES (?, ?)", arrayOf("seeded", "1"))
+        synchronized(restoreLock) {
+            recoverInterruptedRestore()
+            check(mediaDirectory.isDirectory || mediaDirectory.mkdirs())
+            val db = writableDatabase
+            db.beginTransaction()
+            try {
+                if (rows(db, "SELECT value FROM metadata WHERE key = ?", arrayOf("seeded")).length() == 0) {
+                    val seed = JSONObject(context.assets.open("website/content.json").bufferedReader().use { it.readText() })
+                    writeContent(db, seed)
+                    db.execSQL("INSERT INTO metadata (key, value) VALUES (?, ?)", arrayOf("seeded", "1"))
+                }
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
             }
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
         }
+    }
+
+    override fun close() = synchronized(restoreLock) { super.close() }
+
+    private fun recoverInterruptedRestore() {
+        val marker = File(context.filesDir, "webeasy-restore.json")
+        if (!marker.exists()) return
+        val name = JSONObject(marker.readText()).getString("recovery")
+        require(name.matches(Regex("restore-recovery-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))) { "Invalid restore recovery record." }
+        val recovery = safeFile(context.filesDir, name)
+        val database = context.getDatabasePath(databaseName)
+        val names = listOf(database.name, "${database.name}-journal", "${database.name}-wal", "${database.name}-shm")
+        if (File(recovery, database.name).isFile) {
+            names.forEach { val file = File(database.parentFile, it); check(!file.exists() || file.delete()) }
+        }
+        for (file in names.map { File(recovery, it) }.filter(File::exists)) {
+            val target = File(database.parentFile, file.name)
+            check(!target.exists() || target.delete())
+            check(file.renameTo(target)) { "Cannot recover the original database." }
+        }
+        if (File(recovery, "media").isDirectory) {
+            if (mediaDirectory.exists()) check(mediaDirectory.deleteRecursively())
+            check(File(recovery, "media").renameTo(mediaDirectory)) { "Cannot recover original media." }
+        }
+        check(marker.delete()) { "Cannot finish interrupted restore recovery." }
+        if (recovery.exists()) recovery.deleteRecursively()
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -140,13 +185,101 @@ class ContentStore(private val context: Context) :
             arrayOf(project.toString()))
     }
 
-    fun templateSources(): JSONObject? =
-        rows(readableDatabase, "SELECT value FROM metadata WHERE key = 'template_sources'")
-            .optJSONObject(0)?.getString("value")?.let(::JSONObject)
+    private fun metadata(key: String): String? =
+        rows(readableDatabase, "SELECT value FROM metadata WHERE key = ?", arrayOf(key)).optJSONObject(0)?.getString("value")
+
+    fun templateSources(): JSONObject? {
+        val index = metadata("template_source_index") ?: return metadata("template_sources")?.let(::JSONObject)
+        return JSONObject().apply {
+            val paths = JSONArray(index)
+            require(paths.length() <= 1024)
+            for (i in 0 until paths.length()) {
+                val path = paths.getString(i)
+                put(path, metadata("template_source/$path") ?: error("Stored template is missing."))
+            }
+        }
+    }
 
     fun saveTemplateSources(sources: JSONObject) {
-        writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
-            arrayOf(sources.toString()))
+        val db = writableDatabase
+        db.beginTransaction()
+        try { writeTemplateSources(sources); db.setTransactionSuccessful() } finally { db.endTransaction() }
+    }
+
+    private fun writeTemplateSources(sources: JSONObject) {
+        val db = writableDatabase
+        db.execSQL("DELETE FROM metadata WHERE key IN ('template_sources', 'template_source_index') OR key LIKE 'template_source/%'")
+        val paths = sources.keys().asSequence().toList().sorted()
+        require(paths.size <= 1024)
+        for (path in paths) {
+            require(path.matches(Regex("webeasy_templates/(templates|components)/[a-z][a-z0-9-]*\\.html")))
+            val source = sources.getString(path)
+            require(source.toByteArray().size <= 256 * 1024) { "Template is too large." }
+            insert(db, "metadata", mapOf("key" to "template_source/$path", "value" to source))
+        }
+        insert(db, "metadata", mapOf("key" to "template_source_index", "value" to JSONArray(paths).toString()))
+    }
+
+    fun assetFiles(): Map<String, ByteArray> {
+        val index = metadata("asset_overrides")?.let(::JSONObject) ?: return emptyMap()
+        require(index.length() <= 1024)
+        var total = 0L
+        val files = index.keys().asSequence().associateWith { path ->
+            val entry = index.getJSONObject(path)
+            val size = entry.getInt("size")
+            val chunks = entry.getInt("chunks")
+            require(CustomizationAssets.validPath(path) && size in 0..CustomizationAssets.maximumFileBytes &&
+                chunks == (size + assetChunkSize - 1) / assetChunkSize)
+            total += size
+            require(total <= CustomizationAssets.maximumTotalBytes)
+            java.io.ByteArrayOutputStream(size).use { output ->
+                for (chunk in 0 until chunks) {
+                    val encoded = metadata("asset_chunk/$path/$chunk") ?: error("Stored website asset is missing.")
+                    val bytes = Base64.getDecoder().decode(encoded)
+                    require(bytes.size <= assetChunkSize && output.size() + bytes.size <= size)
+                    output.write(bytes)
+                }
+                require(output.size() == size) { "Stored website asset is incomplete." }
+                output.toByteArray()
+            }
+        }
+        return files
+    }
+
+    fun customizationFiles(): Map<String, ByteArray> {
+        val overrides = templateSources()
+        val catalog = JSONObject(context.assets.open("website/catalog.json").bufferedReader().use { it.readText() })
+        val files = mutableMapOf<String, ByteArray>()
+        for (group in listOf("templates", "components")) {
+            for (entry in catalog.getJSONArray(group).objects()) {
+                val path = "webeasy_templates/$group/${entry.getString("id")}.html"
+                files[path] = (if (overrides?.has(path) == true) overrides.getString(path) else entry.getString("source")).toByteArray()
+            }
+        }
+        for (path in CustomizationAssets.bundled) files[path] = context.assets.open("website/$path").use { it.readBytes() }
+        files.putAll(assetFiles())
+        return files
+    }
+
+    fun saveCustomization(sources: JSONObject, assets: Map<String, ByteArray>) {
+        CustomizationAssets.validate(assets)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            writeTemplateSources(sources)
+            db.execSQL("DELETE FROM metadata WHERE key = 'asset_overrides' OR key LIKE 'asset_chunk/%'")
+            val index = JSONObject()
+            for ((path, bytes) in assets) {
+                val chunks = (bytes.size + assetChunkSize - 1) / assetChunkSize
+                for (chunk in 0 until chunks) {
+                    val data = bytes.copyOfRange(chunk * assetChunkSize, minOf(bytes.size, (chunk + 1) * assetChunkSize))
+                    insert(db, "metadata", mapOf("key" to "asset_chunk/$path/$chunk", "value" to Base64.getEncoder().encodeToString(data)))
+                }
+                index.put(path, JSONObject().put("size", bytes.size).put("chunks", chunks))
+            }
+            insert(db, "metadata", mapOf("key" to "asset_overrides", "value" to index.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     private fun insert(db: SQLiteDatabase, table: String, values: Map<String, Any?>) {
@@ -380,18 +513,116 @@ class ContentStore(private val context: Context) :
         require(width >= minimum) { "Cover images must be at least $minimum pixels wide; smaller images are not enlarged." }
     }
 
+    fun backupSnapshot(): File = synchronized(restoreLock) {
+        if (File(context.filesDir, "webeasy-restore.json").exists()) {
+            close(); recoverInterruptedRestore(); writableDatabase
+        }
+        val directory = File(context.cacheDir, "backup-snapshot-${UUID.randomUUID()}").apply { check(mkdirs()) }
+        try {
+            writableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+            close()
+            try { context.getDatabasePath(databaseName).copyTo(File(directory, "webeasy.sqlite")) }
+            finally { writableDatabase }
+            File(directory, "media").mkdirs()
+            for (file in mediaDirectory.walkTopDown()) {
+                require(!java.nio.file.Files.isSymbolicLink(file.toPath())) { "Media contains an unsupported symbolic link." }
+                if (file.isFile) {
+                    val path = "media/${file.relativeTo(mediaDirectory).invariantSeparatorsPath}"
+                    val target = safeFile(directory, path).also { it.parentFile!!.mkdirs() }
+                    file.copyTo(target)
+                }
+            }
+            validateSnapshot(directory)
+            directory
+        } catch (error: Exception) { directory.deleteRecursively(); throw error }
+    }
+
+    private fun validateSnapshot(directory: File) {
+        val file = File(directory, "webeasy.sqlite")
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS).use { db ->
+            require(db.version == 4) { "Unsupported backup database version." }
+            db.rawQuery("PRAGMA quick_check", null).use { cursor ->
+                require(cursor.moveToFirst() && cursor.getString(0) == "ok") { "Backup database is damaged." }
+            }
+            db.rawQuery("PRAGMA foreign_key_check", null).use { require(!it.moveToFirst()) { "Backup database has broken references." } }
+            val allowed = setOf("metadata", "pages", "news", "sections", "asides", "media", "android_metadata")
+            db.rawQuery("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'trigger')", null).use { cursor ->
+                val tables = mutableSetOf<String>()
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(0)
+                    require(cursor.getString(1) == "table" && (name in allowed || name.startsWith("sqlite_"))) { "Unexpected backup database schema." }
+                    tables.add(name)
+                }
+                require(tables.containsAll(allowed - "android_metadata")) { "Incomplete backup database." }
+            }
+            for (media in rows(db, "SELECT filename, size FROM media").objects()) {
+                val target = safeFile(directory, "media/${media.getString("filename")}")
+                require(target.isFile && target.length() == media.getLong("size")) { "Backup media is missing or damaged." }
+            }
+        }
+    }
+
+    fun restoreSnapshot(directory: File) = synchronized(restoreLock) {
+        validateSnapshot(directory)
+        if (File(context.filesDir, "webeasy-restore.json").exists()) {
+            close(); recoverInterruptedRestore(); writableDatabase
+        }
+        val recovery = File(context.filesDir, "restore-recovery-${UUID.randomUUID()}").apply { check(mkdirs()) }
+        val marker = File(context.filesDir, "webeasy-restore.json")
+        val pending = File(context.filesDir, "webeasy-restore.pending")
+        pending.outputStream().use { output ->
+            output.write(JSONObject().put("recovery", recovery.name).toString().toByteArray())
+            output.fd.sync()
+        }
+        check(pending.renameTo(marker)) { "Cannot write restore recovery record." }
+        val database = context.getDatabasePath(databaseName)
+        val names = listOf(database.name, "${database.name}-journal", "${database.name}-wal", "${database.name}-shm")
+        var recovered = false
+        swapping = true
+        try {
+            close()
+            for (name in names) {
+                val original = File(database.parentFile, name)
+                if (original.exists()) {
+                    val previous = File(recovery, name)
+                    check(original.renameTo(previous)) { "Cannot preserve the current database." }
+                }
+            }
+            if (mediaDirectory.exists()) {
+                check(mediaDirectory.renameTo(File(recovery, "media"))) { "Cannot preserve current media." }
+            }
+            check(File(directory, "webeasy.sqlite").renameTo(database)) { "Cannot install the backup database." }
+            check(File(directory, "media").renameTo(mediaDirectory)) { "Cannot install backup media." }
+            writableDatabase
+            project(); templateSources(); assetFiles()
+            check(marker.delete()) { "Cannot complete restore safely." }
+            recovered = true
+        } catch (error: Exception) {
+            close()
+            recoverInterruptedRestore()
+            writableDatabase
+            recovered = true
+            throw error
+        } finally { swapping = false; if (recovered) recovery.deleteRecursively() }
+    }
+
     fun prepareSite(files: JSONArray, references: JSONArray): File {
         val token = UUID.randomUUID().toString()
         val directory = File(context.cacheDir, "website-$token").apply { mkdirs() }
         try {
+            val assets = assetFiles()
             for (record in files.objects()) {
                 val path = record.getString("path")
                 require(path.endsWith(".html"))
                 safeFile(directory, path).also { it.parentFile!!.mkdirs() }.writeText(record.getString("html"))
             }
-            for (path in listOf("assets/site.css", "assets/site.js", "assets/logo.svg") + List(references.length()) { references.getString(it) }) {
+            for (path in (listOf("assets/site.css", "assets/site.js", "assets/logo.svg") + List(references.length()) { references.getString(it) } + assets.keys).distinct()) {
                 val target = safeFile(directory, path).also { it.parentFile!!.mkdirs() }
-                if (path.startsWith("assets/")) context.assets.open("website/$path").use { source -> target.outputStream().use(source::copyTo) }
+                if (path.startsWith("assets/")) {
+                    val customized = assets[path]
+                    if (customized != null) target.writeBytes(customized)
+                    else context.assets.open("website/$path").use { source -> target.outputStream().use(source::copyTo) }
+                }
                 else {
                     require(path.startsWith("media/"))
                     val filename = path.removePrefix("media/")
@@ -425,6 +656,8 @@ class ContentStore(private val context: Context) :
     }
 
     companion object {
+        private val restoreLock = Any()
+        private const val assetChunkSize = 256 * 1024
         val extensions = mapOf("image/jpeg" to "jpg", "image/png" to "png", "image/gif" to "gif",
             "image/webp" to "webp", "video/mp4" to "mp4", "video/webm" to "webm",
             "video/quicktime" to "mov", "video/ogg" to "ogg")

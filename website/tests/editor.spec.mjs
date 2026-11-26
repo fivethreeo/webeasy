@@ -870,7 +870,7 @@ test("SE-sized keyboard viewport keeps media actions reachable after scrolling l
   await expect(field.locator("figure img")).toHaveAttribute("src", "media/native-test.png");
 });
 
-test("native generator loads server templates as a batch and exports their literal source", async ({ page }) => {
+test("native generator loads templates and exports their literal source only explicitly", async ({ page }) => {
   const [catalog, project] = await Promise.all([
     page.request.get("/catalog.json").then((response) => response.json()),
     page.request.get("/content.json").then((response) => response.json()),
@@ -888,7 +888,8 @@ test("native generator loads server templates as a batch and exports their liter
     return {
       error: loaded.error ?? null,
       home: compiled.files.find((file) => file.path === "index.html").html,
-      source: compiled.files.find((file) => file.path === "webeasy_templates/templates/master.html").html,
+      source: JSON.parse(window.WebeasyGenerator.templates(JSON.stringify(loaded.catalog))).sources["webeasy_templates/templates/master.html"],
+      automaticSources: compiled.files.some((file) => file.path.startsWith("webeasy_templates/")),
       preview: preview.files[0].html,
       rejected: rejected.error,
       original: catalog.templates.find((entry) => entry.id === "master").source,
@@ -897,6 +898,7 @@ test("native generator loads server templates as a batch and exports their liter
   expect(result.error).toBeNull();
   expect(result.home).toContain('data-remote-master="yes"');
   expect(result.source).toContain("{{{navigation}}}");
+  expect(result.automaticSources).toBe(false);
   expect(result.preview).toContain('data-remote-master="yes"');
   expect(result.rejected).toBeTruthy();
   expect(result.original).not.toContain("data-remote-master");
@@ -916,8 +918,8 @@ test("native generation engine normalizes content and renders portable website f
   expect(prepared.project).toEqual(result.project);
   expect(prepared.referencedMedia).toEqual(result.referencedMedia);
   expect(prepared.renderRequest.documents.map((document) => document.path))
-    .toEqual(result.files.filter((file) => !file.path.startsWith("webeasy_templates/")).map((file) => file.path));
-  expect(prepared.files.every((file) => file.path.startsWith("webeasy_templates/"))).toBe(true);
+    .toEqual(result.files.map((file) => file.path));
+  expect(prepared.files).toEqual([]);
   expect(prepared.renderRequest.partials["site-header"]).toContain("{{#menu}}");
   expect(prepared.renderRequest.documents[0].values.page.sections[0].heading).toBeTruthy();
   const invalid = await page.evaluate(() => JSON.parse(window.WebeasyGenerator.normalize(JSON.stringify({

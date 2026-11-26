@@ -106,7 +106,7 @@ enum SitePublisher {
             return sources
         } catch let approval as HostKeyApproval { throw approval }
         catch {
-            throw ContentError.invalid("Cannot load templates. For a server published by an older app, publish once with this app version to add missing template files; existing server edits are preserved. Otherwise check the destination, read permissions, certificate or saved server key. Local templates have not changed.")
+            throw ContentError.invalid("Cannot load templates. Explicitly export templates and assets from Advanced settings and upload webeasy_templates to the configured hosting destination. Check read permissions, certificate or saved server key. Local templates have not changed.")
         }
     }
 

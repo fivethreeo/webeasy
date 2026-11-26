@@ -14,7 +14,8 @@ phone photo/video pickers, and static-site export. Template
 examples and the building-block showcase are also bundled. Hosting setup QR codes
 can be read from saved pictures/screenshots or a camera photo. The Hosting tab
 publishes the generated website directly using FTP, explicit FTPS, or SFTP.
-Dropbox backup is not implemented.
+Direct Dropbox integration is not implemented; Advanced directory backups can
+use cloud providers that expose writable folders through the system picker.
 
 **Settings** contains the Simple/Advanced mode selector and **Templates**.
 Links use a native full-screen form like image details, with page selection,
@@ -99,14 +100,20 @@ images, video players, callouts), not a generic layout builder. Every Layout
 primitives are internal CSS implementation details: no stack/grid/cluster
 components, CSS controls, or HTML source panels are exposed in the app showcase.
 
-Open **Settings > Templates** for **Load templates from server** in Advanced mode. Publishing creates
+In Advanced mode, **Settings > Templates and website assets** explicitly exports
 `webeasy_templates/templates/*.html` (including `master.html`) and
-`webeasy_templates/components/*.html` under the configured upload destination.
-Only missing source files are uploaded; existing server edits are preserved.
-Edit these UTF-8 files on your own hosting, then load them into the app. All files
-must load and validate before any local source is replaced. Loaded sources are
+`webeasy_templates/components/*.html` together with public `assets/` files to a
+chosen directory. Edit its HTML, CSS, JavaScript, images, or fonts, then **Load
+templates and assets from directory**. All expected template files and required
+assets must load and validate before either local collection is replaced.
+Unrelated destination files are kept; hidden platform metadata is ignored on import.
+Trusted native editor/generator resources cannot be overridden. Loaded sources and assets are
 saved in SQLite and survive restarts and app updates; previews, exports, and the
-next publish use them. This loads existing registered templates, not new catalog
+next publish use them. Ordinary website export/publishing includes required
+assets but never automatically copies editable template sources.
+For the existing **Settings > Templates > Load templates from server** action,
+explicitly export and upload `webeasy_templates` to your hosting first.
+This loads existing registered templates, not new catalog
 entries. Each file is limited to 256 KiB. Loading templates does not save or
 replace your page/news content.
 
@@ -220,11 +227,22 @@ changed page or news form asks to Save, Don't save, or Cancel. Discard restores
 that item's owned content without discarding unrelated drafts. Save explicitly
 before closing; export and publishing save their content snapshot first. Android exports a ZIP through the share
 sheet, and iOS exports a website folder through Files. Only referenced media,
-generated HTML, template source files, and website assets are exported, never the editable SQLite
-database, editor, catalog, or hosting credentials. Backup remains a future
-integration. Keep the live SQLite database local and create
-consistent snapshots for backup. Configure Dropbox separately from QR-provisioned
-SFTP/FTPS hosting credentials. Credentials must never go in the website bundle.
+generated HTML and website assets are exported, never the editable SQLite
+database, editor, catalog, or hosting credentials.
+
+Advanced **Settings > Database and media backups** remembers a system-selected
+directory and creates backups only when **Back up now** is pressed. Each UTC
+`yyyy-MM-dd_HH-mm-ss-SSSZ` folder contains a consistent `webeasy.sqlite`
+snapshot, all `media/` files, and a final `webeasy-backup.json` checksum manifest.
+Sources/assets stored in SQLite and the published-content baseline are included;
+unsaved drafts and hosting credentials are not. Select any completed backup to
+restore after confirmation. Files, database integrity, schema, and media are
+validated before replacement; private recovery storage protects interrupted restores.
+After each successful backup, only verified app-owned directories strictly older
+than 14 days are removed. Modified, incomplete, and unrelated directories are kept.
+Choose a cloud provider through the system folder picker if it supports directories;
+no separate Dropbox account integration is implemented. Hosting credentials remain
+separate and must never go in the website bundle.
 
 The native **Changes** tab has separate **Unsaved** and **Unpublished** views,
 with before/after values for changed content, ordering, and homepage selection.
@@ -264,6 +282,10 @@ Sections have heading/content and optional asides. Asides have content and an
 optional heading. Internal IDs are stable; sections/asides belong to exactly one
 owner and are deleted with it. Deleting the last item does not restore the seed
 on the next launch.
+
+New page slugs follow **Menu title** live; new news slugs follow **Title**.
+Editing a slug stops title-based updates. Save gives conflicting new items
+numbered suffixes (`-2`, `-3`), without renaming saved entries.
 
 Choose **Use as homepage** in a native page/subpage form to select `index.html`.
 Existing projects default to their first top-level page. The selected page

@@ -19,8 +19,8 @@ android {
         applicationId = "no.webeasy.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.1.21"
+        versionCode = 22
+        versionName = "0.1.22"
     }
 
     compileOptions {
@@ -78,6 +78,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("commons-net:commons-net:3.12.0")
     implementation("com.hierynomus:sshj:0.40.0")

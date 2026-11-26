@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.webkit.WebViewAssetLoader
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -86,6 +87,35 @@ class MainActivity : ComponentActivity() {
     private var savedUploadSubfolder by mutableStateOf("")
     private var savedContent by mutableStateOf<String?>(null)
     private var publishedContent by mutableStateOf<String?>(null)
+    private val automaticSlugs = mutableSetOf<String>()
+    private val directoryTools by lazy { DirectoryTools(this) }
+    private enum class DirectoryAction { EXPORT_CUSTOMIZATION, LOAD_CUSTOMIZATION, BACKUP_DIRECTORY }
+    private var directoryAction: DirectoryAction? = null
+    private var backupDirectory by mutableStateOf<Uri?>(null)
+    private var backups by mutableStateOf<List<DirectoryTools.Backup>>(emptyList())
+    private var pendingRestore by mutableStateOf<DirectoryTools.Backup?>(null)
+
+    private val directoryPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val action = directoryAction
+        directoryAction = null
+        if (uri == null || action == null || !advancedUI || busy) return@registerForActivityResult
+        val directory = runCatching { DocumentFile.fromTreeUri(this, uri) }.getOrNull()
+        if (directory == null || !directory.isDirectory) { status = "Choose a directory."; return@registerForActivityResult }
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }.onFailure {
+            runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
+        when (action) {
+            DirectoryAction.EXPORT_CUSTOMIZATION -> exportCustomization(directory)
+            DirectoryAction.LOAD_CUSTOMIZATION -> loadCustomization(directory)
+            DirectoryAction.BACKUP_DIRECTORY -> {
+                backupDirectory = uri
+                getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putString("backup-directory", uri.toString()).apply()
+                refreshBackups()
+            }
+        }
+    }
 
     private fun loadPublishingSettings(connection: JSONObject) {
         hostingServer = if (connection.has("host"))
@@ -230,6 +260,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         advancedUI = getSharedPreferences("editor-ui", MODE_PRIVATE).getBoolean("advanced", false)
+        backupDirectory = getSharedPreferences("editor-ui", MODE_PRIVATE).getString("backup-directory", null)?.let(Uri::parse)
+        directoryAction = savedInstanceState?.getString("directoryAction")?.let { name -> DirectoryAction.entries.firstOrNull { it.name == name } }
         tab = savedInstanceState?.getInt("selectedTab", 0)?.takeIf { it in 0..4 } ?: 0
         savedInstanceState?.getString("hostingQRPhoto")?.takeIf {
             it.startsWith("hosting-qr-") && it.endsWith(".jpg") && File(it).name == it
@@ -240,15 +272,7 @@ class MainActivity : ComponentActivity() {
         }
         worker.execute {
             runCatching {
-                val examples = JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
-                store.templateSources()?.let { sources ->
-                    for (group in listOf("templates", "components")) {
-                        for (entry in examples.getJSONArray(group).records()) {
-                            val path = "webeasy_templates/$group/${entry.getString("id")}.html"
-                            if (sources.has(path)) entry.put("source", sources.getString(path))
-                        }
-                    }
-                }
+                val examples = currentCatalog()
                 Triple(store.project(), examples,
                     store.publishedSnapshot())
             }.fold(onSuccess = { (content, examples, published) -> runOnUiThread {
@@ -299,6 +323,12 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(onClick = { pendingBack = null }) { Text("Cancel") }
                         } })
                 }
+                pendingRestore?.let { backup ->
+                    AlertDialog(onDismissRequest = { pendingRestore = null }, title = { Text("Restore this backup?") },
+                        text = { Text("This replaces the database, media, customizations and current unsaved edits. Hosting credentials are not changed.") },
+                        confirmButton = { Button(onClick = { pendingRestore = null; restoreBackup(backup) }, enabled = !busy) { Text("Restore") } },
+                        dismissButton = { OutlinedButton(onClick = { pendingRestore = null }) { Text("Cancel") } })
+                }
                 val primaryNavigation = screens.isEmpty()
                 val tablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
                 Box(Modifier.fillMaxSize()) {
@@ -330,6 +360,8 @@ class MainActivity : ComponentActivity() {
                                     }
                                     screen?.kind == "template" -> TemplateSource(screen.record!!)
                                     screen?.kind == "templates" -> Templates()
+                                    screen?.kind == "customization" -> Customizations()
+                                    screen?.kind == "backups" -> Backups()
                                     screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
                                     else -> RootList(revision)
                                 }
@@ -355,6 +387,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        directoryAction?.let { outState.putString("directoryAction", it.name) }
         pendingQRPhoto?.let { outState.putString("hostingQRPhoto", it.name) }
         outState.putInt("selectedTab", tab)
         super.onSaveInstanceState(outState)
@@ -379,11 +412,50 @@ class MainActivity : ComponentActivity() {
 
     private fun create(kind: String, siblings: JSONArray): JSONObject {
         val prefix = if (kind == "news") "news" else "page"
-        var index = siblings.length() + 1
-        while (siblings.records().any { it.optString("slug") == "$prefix-$index" }) index += 1
-        return JSONObject().put("id", UUID.randomUUID().toString()).put("title", "New $prefix").put("menuTitle", "New page")
-            .put("slug", "$prefix-$index").put("date", LocalDate.now().toString()).put("heading", if (kind == "section") "New section" else "")
+        val record = JSONObject().put("id", UUID.randomUUID().toString()).put("title", "New $prefix").put("menuTitle", "New page")
+            .put("date", LocalDate.now().toString()).put("heading", if (kind == "section") "New section" else "")
             .put("content", "<p></p>").put("shortContent", "<p></p>").put("sections", JSONArray()).put("asides", JSONArray()).put("children", JSONArray())
+        record.put("slug", ContentSlugs.generated("New $prefix", kind, record, siblings.records(),
+            kind == "page" && siblings === project?.optJSONArray("pages")))
+        if (kind in listOf("page", "news")) automaticSlugs.add(record.getString("id"))
+        return record
+    }
+
+    private fun currentCatalog(): JSONObject {
+        val result = JSONObject(assets.open("website/catalog.json").bufferedReader().use { it.readText() })
+        store.templateSources()?.let { sources ->
+            for (group in listOf("templates", "components")) {
+                for (entry in result.getJSONArray(group).records()) {
+                    val path = "webeasy_templates/$group/${entry.getString("id")}.html"
+                    if (sources.has(path)) entry.put("source", sources.getString(path))
+                }
+            }
+        }
+        return result
+    }
+
+    private fun slugSiblings(record: JSONObject, kind: String): Pair<List<JSONObject>, Boolean> {
+        val root = project?.optJSONArray(if (kind == "news") "news" else "pages") ?: return emptyList<JSONObject>() to false
+        if (kind == "news") return root.records() to false
+        fun find(pages: JSONArray): JSONArray? {
+            if (pages.records().any { it.getString("id") == record.getString("id") }) return pages
+            for (page in pages.records()) page.optJSONArray("children")?.let { find(it) }?.let { return it }
+            return null
+        }
+        val siblings = find(root) ?: return emptyList<JSONObject>() to false
+        return siblings.records() to (siblings === root)
+    }
+
+    private fun resolveSlugConflicts() {
+        val content = project ?: return
+        var resolved = false
+        fun pages(items: JSONArray, root: Boolean) {
+            resolved = ContentSlugs.resolve(items.records(), drafts::isSaved, rootPage = root) || resolved
+            items.records().forEach { it.optJSONArray("children")?.let { children -> pages(children, false) } }
+        }
+        pages(content.getJSONArray("pages"), true)
+        resolved = ContentSlugs.resolve(content.getJSONArray("news").records(), drafts::isSaved, news = true) || resolved
+        if (resolved) changed()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -480,6 +552,148 @@ class MainActivity : ComponentActivity() {
             }
             Text("Simple hides sections, covers, template loading, and the public URL prefix. Advanced shows all options.")
             OutlinedButton(onClick = { screens.add(Screen("templates")) }, enabled = ready && !busy) { Text("Templates") }
+            if (advancedUI) {
+                OutlinedButton(onClick = { screens.add(Screen("customization")) }, enabled = ready && !busy) { Text("Export / load templates and assets") }
+                OutlinedButton(onClick = { screens.add(Screen("backups")); refreshBackups() }, enabled = ready && !busy) { Text("Backups") }
+            }
+        }
+    }
+
+    private fun chooseDirectory(action: DirectoryAction) {
+        if (!advancedUI || busy) return
+        directoryAction = action
+        directoryPicker.launch(if (action == DirectoryAction.BACKUP_DIRECTORY) backupDirectory else null)
+    }
+
+    @Composable
+    private fun Customizations() {
+        if (!advancedUI) return
+        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Templates and website assets", style = MaterialTheme.typography.titleLarge)
+            Text("Export to a directory, edit its webeasy_templates and assets folders, then load that directory. Loading replaces the current customization as a complete batch.")
+            OutlinedButton(onClick = { chooseDirectory(DirectoryAction.EXPORT_CUSTOMIZATION) }, enabled = ready && !busy && project != null) {
+                Text("Export templates and assets")
+            }
+            OutlinedButton(onClick = { chooseDirectory(DirectoryAction.LOAD_CUSTOMIZATION) }, enabled = ready && !busy && project != null) {
+                Text("Load templates and assets")
+            }
+            Text("Website CSS, JavaScript, images and fonts can be customized. Native editor resources stay protected. Files are exported only when requested; normal publishing does not write template-source copies.")
+            if (busy) CircularProgressIndicator()
+        }
+    }
+
+    private fun exportCustomization(directory: DocumentFile) {
+        if (!advancedUI || busy || project == null) return
+        busy = true; status = "Exporting templates and website assets..."
+        worker.execute {
+            runCatching { directoryTools.exportCustomization(directory, store.customizationFiles()) }.fold(
+                onSuccess = { runOnUiThread { busy = false; status = "Templates and website assets exported." } },
+                onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot export customization." } })
+        }
+    }
+
+    private fun loadCustomization(directory: DocumentFile) {
+        if (!advancedUI || busy || catalog == null || project == null || !ready) return
+        busy = true; status = "Loading templates and website assets..."
+        val current = catalog!!
+        val paths = buildList {
+            for (group in listOf("templates", "components")) current.getJSONArray(group).records().forEach {
+                add("webeasy_templates/$group/${it.getString("id")}.html")
+            }
+        }
+        worker.execute {
+            runCatching { directoryTools.loadCustomization(directory, paths) }.fold(onSuccess = { loaded -> runOnUiThread {
+                val input = JSONObject().put("catalog", current).put("sources", loaded.sources).put("project", project)
+                generator.evaluateJavascript("window.WebeasyGenerator.loadTemplates(${JSONObject.quote(input.toString())})") { response ->
+                    val updated = runCatching {
+                        val result = JSONObject(JSONTokener(response).nextValue() as String)
+                        check(!result.has("error")) { result.getString("error") }
+                        result.getJSONObject("catalog")
+                    }
+                    if (updated.isFailure) {
+                        busy = false; status = "Customization not loaded: ${updated.exceptionOrNull()?.message} Current customization is unchanged."
+                    } else worker.execute {
+                        runCatching { store.saveCustomization(loaded.sources, loaded.assets) }.fold(
+                            onSuccess = { runOnUiThread {
+                                catalog = updated.getOrThrow(); busy = false
+                                status = "Templates and website assets loaded and saved locally."
+                            } },
+                            onFailure = { runOnUiThread { busy = false; status = "Cannot save customization. Current customization is unchanged." } })
+                    }
+                }
+            } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot read customization directory." } })
+        }
+    }
+
+    @Composable
+    private fun Backups() {
+        if (!advancedUI) return
+        LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item {
+                Text("Database and media backups", style = MaterialTheme.typography.titleLarge)
+                Text("Backups contain saved SQLite content, customizations and stored media, not hosting credentials. Save current edits first. Each backup gets a UTC datetime directory.")
+                OutlinedButton(onClick = { chooseDirectory(DirectoryAction.BACKUP_DIRECTORY) }, enabled = !busy) { Text("Choose backup directory") }
+                Text(if (backupDirectory == null) "No backup directory selected." else "Backup directory selected.")
+                OutlinedButton(onClick = ::createBackup, enabled = ready && !busy && backupDirectory != null) { Text("Back up database and media") }
+                OutlinedButton(onClick = ::refreshBackups, enabled = !busy && backupDirectory != null) { Text("Refresh backups") }
+                Text("After a successful backup, completed app-created backups older than 14 days are removed. Unrelated files and directories are kept.")
+                if (busy) CircularProgressIndicator()
+            }
+            items(backups.size, key = { backups[it].directory.uri.toString() }) { index ->
+                val backup = backups[index]
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(backup.createdAt.toString(), style = MaterialTheme.typography.titleMedium)
+                    Text("${backup.files.length()} files")
+                    OutlinedButton(onClick = { pendingRestore = backup }, enabled = !busy) { Text("Restore backup") }
+                }
+            }
+        }
+    }
+
+    private fun backupRoot(): DocumentFile = backupDirectory?.let { DocumentFile.fromTreeUri(this, it) }
+        ?.takeIf { it.isDirectory } ?: error("Choose an accessible backup directory first.")
+
+    private fun refreshBackups() {
+        if (!advancedUI || busy || backupDirectory == null) return
+        busy = true
+        worker.execute {
+            runCatching { directoryTools.backups(backupRoot()) }.fold(
+                onSuccess = { runOnUiThread { backups = it; busy = false } },
+                onFailure = { runOnUiThread { backups = emptyList(); busy = false; status = it.message ?: "Cannot read backups." } })
+        }
+    }
+
+    private fun createBackup() {
+        if (!advancedUI || busy || backupDirectory == null || !ready) return
+        busy = true; status = "Backing up saved database and media..."
+        worker.execute {
+            runCatching {
+                val root = backupRoot()
+                val snapshot = store.backupSnapshot()
+                try { directoryTools.backup(root, snapshot) } finally { snapshot.deleteRecursively() }
+                directoryTools.backups(root)
+            }.fold(onSuccess = { runOnUiThread { backups = it; busy = false; status = "Backup created; older app-owned backups checked for cleanup." } },
+                onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot create backup." } })
+        }
+    }
+
+    private fun restoreBackup(backup: DirectoryTools.Backup) {
+        if (!advancedUI || busy) return
+        busy = true; status = "Validating and restoring backup..."
+        worker.execute {
+            runCatching {
+                store.restoreOperation {
+                    val snapshot = directoryTools.restoreSnapshot(backup)
+                    try { store.restoreSnapshot(snapshot) } finally { snapshot.deleteRecursively() }
+                    Triple(store.project(), currentCatalog(), store.publishedSnapshot())
+                }
+            }.fold(onSuccess = { (content, examples, published) -> runOnUiThread {
+                project = content; catalog = examples
+                savedContent = content.toString(); publishedContent = published
+                drafts.markSaved(drafts.capture(content)); automaticSlugs.clear()
+                screens.clear(); tab = 2; revision++; busy = false
+                status = "Database, media and customizations restored. Hosting credentials unchanged."
+            } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "Restore failed; current content was preserved." } })
         }
     }
 
@@ -491,7 +705,7 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
                         Text("Load templates from server")
                     }
-                    Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+                    Text("Export templates and assets explicitly from Advanced settings. Upload the webeasy_templates folder to your hosting to load its edited HTML here.")
                     if (busy) CircularProgressIndicator()
                 }
             }
@@ -703,9 +917,9 @@ class MainActivity : ComponentActivity() {
         val layouts = catalog?.getJSONArray("templates")?.records()?.filter { it.optBoolean("pageLayout") } ?: emptyList()
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (screen.kind in listOf("page", "news")) {
-                item { NativeText(record, "title", "Title") }
+                item { NativeText(record, "title", "Title", screen.kind) }
                 if (screen.kind == "page") {
-                    item { NativeText(record, "menuTitle", "Menu title") }
+                    item { NativeText(record, "menuTitle", "Menu title", screen.kind) }
                     item {
                         val selected = record.optString("templateId", "page")
                         OutlinedButton(onClick = { layoutDialog = true }) {
@@ -719,7 +933,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-                item { NativeText(record, "slug", "Slug") }
+                item { NativeText(record, "slug", "Slug", screen.kind) }
                 item { OutlinedButton(onClick = { dateDialog = true }) { Text("Date: ${record.getString("date")}") } }
             } else item { NativeText(record, "heading", if (screen.kind == "aside") "Heading (optional)" else "Heading") }
             if (screen.kind == "section") item { NativeText(record, "subheading", "Subheading (optional)") }
@@ -793,10 +1007,15 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun NativeText(record: JSONObject, key: String, label: String) {
-        OutlinedTextField(value = record.optString(key), onValueChange = { record.put(key, it); changed() },
-            label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            keyboardOptions = KeyboardOptions(capitalization = if (key == "slug") KeyboardCapitalization.None else KeyboardCapitalization.Sentences))
+    private fun NativeText(record: JSONObject, key: String, label: String, kind: String? = null) {
+        RecordTextField(record, key, label, revision, onChange = {
+            val id = record.getString("id")
+            if (key == "slug") automaticSlugs.remove(id)
+            val automatic = id in automaticSlugs && !drafts.isSaved(id)
+            val (siblings, root) = if (automatic && kind != null) slugSiblings(record, kind) else emptyList<JSONObject>() to false
+            ContentSlugs.update(record, kind, key, it, automatic, siblings, root)
+            changed()
+        })
     }
 
     private fun pagePath(id: String): String? {
@@ -813,6 +1032,7 @@ class MainActivity : ComponentActivity() {
 
     private fun generate(compile: Boolean, path: String? = null, export: Boolean = false, afterSave: (() -> Unit)? = null, publish: Boolean = false) {
         if (busy || !ready || project == null) return
+        if (!compile || export || publish) resolveSlugConflicts()
         busy = true
         val savedRevision = revision
         val savedSnapshot = drafts.capture(project!!)
@@ -834,6 +1054,7 @@ class MainActivity : ComponentActivity() {
                         store.save(result.getJSONObject("project"))
                         runOnUiThread {
                             drafts.markSaved(savedSnapshot)
+                            automaticSlugs.removeAll(savedSnapshot.records.keys)
                             savedContent = result.getJSONObject("project").toString()
                         }
                     }

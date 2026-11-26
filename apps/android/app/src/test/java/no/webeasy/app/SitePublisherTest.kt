@@ -118,8 +118,8 @@ class SitePublisherTest {
             assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
             root.resolve("site/preview/build/$page").delete()
             val missing = assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
-            assertTrue(missing.message!!.contains("publish once with this app version"))
-            assertTrue(missing.message!!.contains("existing server edits are preserved"))
+            assertTrue(missing.message!!.contains("Explicitly export templates and assets"))
+            assertTrue(missing.message!!.contains("upload webeasy_templates"))
             assertThrows(IllegalArgumentException::class.java) { SitePublisher.loadTemplates(destination, listOf("../secret.html")) }
             assertEquals("Old home", root.resolve("site/index.html").readText())
         }

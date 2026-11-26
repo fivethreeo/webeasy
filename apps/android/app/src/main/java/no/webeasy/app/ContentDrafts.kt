@@ -35,6 +35,7 @@ class ContentDrafts {
         return Snapshot(records, home)
     }
     fun markSaved(snapshot: Snapshot) { saved = snapshot }
+    fun isSaved(id: String): Boolean = id in saved.records
     fun hasChanges(record: JSONObject, project: JSONObject): Boolean =
         saved.records[record.getString("id")] != serialize(record, home(project))
 

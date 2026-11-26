@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class ContentNode: ObservableObject, Identifiable {
@@ -52,6 +53,7 @@ struct NativePreview: Identifiable {
 
 @MainActor
 final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate {
+    private static let storage: Result<ContentStore, Error> = Result { try ContentStore() }
     @Published var pages: [ContentNode] = []
     @Published var news: [ContentNode] = []
     @Published var status = "Opening local SQLite project..."
@@ -60,6 +62,9 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         didSet { UserDefaults.standard.set(advancedUI, forKey: "advancedUI") }
     }
     @Published var busy = false
+    @Published var backups: [DirectoryTools.Backup] = []
+    @Published var backupDirectoryName: String?
+    @Published var restoreRevision = 0
     @Published var preview: NativePreview?
     @Published var homePageID: String?
     @Published var pendingHostKey: HostKeyApproval?
@@ -73,11 +78,12 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     private var savedHomePageID: String?
     private var savedProject: Data?
     private var publishedProject: Data?
+    private var automaticSlugs: Set<String> = []
 
     override init() {
         let storageError: String?
         do {
-            store = try ContentStore()
+            store = try Self.storage.get()
             storageError = nil
         } catch {
             store = nil
@@ -204,16 +210,61 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         return destination
     }
 
-    func newNode(_ kind: ContentKind, siblings: [ContentNode]) -> ContentNode {
+    func newNode(_ kind: ContentKind, siblings: [ContentNode], rootPage: Bool = false) -> ContentNode {
         let prefix = kind == .news ? "news" : "page"
-        var number = siblings.count + 1
-        while siblings.contains(where: { $0.fields["slug"] == "\(prefix)-\(number)" }) { number += 1 }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
-        return ContentNode(["id": UUID().uuidString, "title": "New \(prefix)", "menuTitle": "New page",
-                            "slug": "\(prefix)-\(number)", "date": formatter.string(from: Date()),
+        let node = ContentNode(["id": UUID().uuidString, "title": "New \(prefix)", "menuTitle": "New page",
+                            "date": formatter.string(from: Date()),
                             "heading": kind == .section ? "New section" : "", "content": "<p></p>", "shortContent": "<p></p>"])
+        node.fields["slug"] = ContentSlugs.generated("New \(prefix)", news: kind == .news, record: node.fields,
+                                                    siblings: siblings.map(\.fields), rootPage: rootPage)
+        if kind == .page || kind == .news { automaticSlugs.insert(node.id) }
+        return node
+    }
+
+    func updateText(_ node: ContentNode, kind: ContentKind, key: String, value: String) {
+        if key == "slug" { automaticSlugs.remove(node.id) }
+        let source = kind == .page ? "menuTitle" : kind == .news ? "title" : nil
+        var siblings: [ContentNode] = []
+        var rootPage = false
+        let automatic = automaticSlugs.contains(node.id) && savedNodes[node.id] == nil
+        if automatic && key == source {
+            if kind == .news { siblings = news }
+            else {
+                func find(_ nodes: [ContentNode]) -> [ContentNode]? {
+                    if nodes.contains(where: { $0.id == node.id }) { return nodes }
+                    for item in nodes { if let found = find(item.children) { return found } }
+                    return nil
+                }
+                siblings = find(pages) ?? []
+                rootPage = pages.contains { $0.id == node.id }
+            }
+        }
+        var fields = node.fields
+        ContentSlugs.update(&fields, source: source, key: key, value: value, automatic: automatic,
+                            siblings: siblings.map(\.fields), rootPage: rootPage)
+        node.fields = fields
+        changed()
+    }
+
+    private func resolveSlugConflicts() {
+        let savedIDs = Set(savedNodes.keys)
+        var resolved = false
+        func resolve(_ nodes: [ContentNode], rootPage: Bool = false, news: Bool = false) {
+            let records = ContentSlugs.resolve(nodes.map(\.fields), savedIDs: savedIDs, rootPage: rootPage, news: news)
+            for (node, record) in zip(nodes, records) where node.fields["slug"] != record["slug"] {
+                node.fields["slug"] = record["slug"]; resolved = true
+            }
+        }
+        func collect(_ nodes: [ContentNode], root: Bool) {
+            resolve(nodes, rootPage: root)
+            for node in nodes { collect(node.children, root: false) }
+        }
+        collect(pages, root: true)
+        resolve(news, news: true)
+        if resolved { changed() }
     }
 
     private var project: [String: Any] {
@@ -267,6 +318,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
 
     func save(afterSaved: (() -> Void)? = nil) {
         guard !busy, ready, let store else { return }
+        resolveSlugConflicts()
         busy = true
         let savedRevision = revision
         Task {
@@ -281,6 +333,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                     try store.save(project)
                 }.value
                 savedNodes = nodes
+                automaticSlugs.subtract(nodes.keys)
                 savedHomePageID = savedHome
                 savedProject = data
                 status = savedRevision == revision ? "Saved locally to SQLite." : "More recent changes remain unsaved."
@@ -293,6 +346,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         guard !busy, ready, let store else { return }
         let destination = publish ? HostingCredentials.load().flatMap { try? JSONDecoder().decode(HostingDestination.self, from: $0) } : nil
         if publish && destination == nil { status = "Import your hosting setup QR first."; return }
+        if export || publish { resolveSlugConflicts() }
         busy = true
         let savedRevision = revision
         Task {
@@ -311,6 +365,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                         try store.save(project)
                     }.value
                     savedNodes = nodes
+                    automaticSlugs.subtract(nodes.keys)
                     savedHomePageID = savedHome
                     savedProject = projectData
                 }
@@ -401,6 +456,134 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         }
     }
 
+    private func backupRoot() throws -> URL {
+        guard let data = UserDefaults.standard.data(forKey: "backupDirectory") else {
+            throw ContentError.invalid("Choose a backup directory first.")
+        }
+        var stale = false
+        let root = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
+        if stale {
+            let renewed = try DirectoryTools.access(root, writing: false) {
+                try $0.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            }
+            UserDefaults.standard.set(renewed, forKey: "backupDirectory")
+        }
+        return root
+    }
+
+    func selectBackupDirectory(_ root: URL) {
+        guard advancedUI, !busy else { return }
+        do {
+            let data = try DirectoryTools.access(root, writing: false) {
+                try $0.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+            }
+            UserDefaults.standard.set(data, forKey: "backupDirectory")
+            refreshBackups()
+        } catch { status = error.localizedDescription }
+    }
+
+    func refreshBackups() {
+        guard advancedUI, !busy else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let root = try backupRoot()
+                backups = try await Task.detached { try DirectoryTools.backups(root) }.value
+                backupDirectoryName = root.lastPathComponent
+                status = "Completed backups in the selected directory."
+            } catch { backups = []; status = error.localizedDescription }
+        }
+    }
+
+    func exportCustomization(_ root: URL) {
+        guard advancedUI, ready, !busy, let store else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                try await Task.detached {
+                    try DirectoryTools.exportCustomization(root, files: store.customizationFiles())
+                }.value
+                status = "Templates and website assets exported. Unrelated directory files were kept."
+            } catch { status = error.localizedDescription }
+        }
+    }
+
+    func loadCustomization(_ root: URL) {
+        guard advancedUI, ready, !busy, let store else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let current = try JSONSerialization.jsonObject(with: Catalog.data(sources: store.templateSources()))
+                let output = try await templateCall("templates", input: current)
+                guard let expected = output["sources"] as? [String: String] else { throw ContentError.invalid("Cannot list templates.") }
+                let paths = expected.keys.sorted()
+                let customization = try await Task.detached {
+                    try DirectoryTools.loadCustomization(root, sourcePaths: paths)
+                }.value
+                let sources = try JSONDecoder().decode([String: String].self, from: customization.sources)
+                let loaded = try await templateCall("loadTemplates", input: ["catalog": current, "sources": sources, "project": project])
+                guard let object = loaded["catalog"] else { throw ContentError.invalid("Cannot read templates.") }
+                let updated = try JSONDecoder().decode(Catalog.self, from: JSONSerialization.data(withJSONObject: object))
+                try await Task.detached { try store.saveCustomization(customization.sources, assets: customization.assets) }.value
+                catalog = updated
+                status = "Templates and website assets loaded and saved. Previews and publishing use them."
+            } catch { status = "Customization not loaded: \(error.localizedDescription)" }
+        }
+    }
+
+    func createBackup() {
+        guard advancedUI, ready, !busy, let store else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let root = try backupRoot()
+                backups = try await Task.detached {
+                    let snapshot = try store.backupSnapshot()
+                    defer { try? FileManager.default.removeItem(at: snapshot) }
+                    _ = try DirectoryTools.backup(root, snapshot: snapshot)
+                    return try DirectoryTools.backups(root)
+                }.value
+                status = "Backup created; older app-owned backups checked for cleanup."
+            } catch { status = error.localizedDescription }
+        }
+    }
+
+    func restoreBackup(_ backup: DirectoryTools.Backup) {
+        guard advancedUI, ready, !busy, let store else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let root = try backupRoot()
+                let (data, catalogData, published) = try await Task.detached {
+                    let scoped = root.startAccessingSecurityScopedResource()
+                    defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+                    let snapshot = try DirectoryTools.restoreSnapshot(backup)
+                    defer { try? FileManager.default.removeItem(at: snapshot) }
+                    try store.restoreSnapshot(snapshot)
+                    return (try JSONSerialization.data(withJSONObject: store.project()),
+                            try Catalog.data(sources: store.templateSources()), try store.publishedSnapshot())
+                }.value
+                guard let restored = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw ContentError.invalid("Cannot read restored project.")
+                }
+                pages = (restored["pages"] as? [[String: Any]] ?? []).map { ContentNode($0) }
+                news = (restored["news"] as? [[String: Any]] ?? []).map { ContentNode($0) }
+                media = restored["media"] as? [[String: Any]] ?? []
+                homePageID = restored["homePageId"] as? String ?? pages.first?.id
+                catalog = try JSONDecoder().decode(Catalog.self, from: catalogData)
+                savedProject = data; publishedProject = published
+                savedNodes = try snapshot(); savedHomePageID = homePageID
+                automaticSlugs.removeAll(); revision += 1; restoreRevision += 1
+                status = "Database, media and customizations restored. Hosting credentials unchanged."
+            } catch { status = "Restore failed: \(error.localizedDescription)" }
+        }
+    }
+
     func previewTemplate(_ id: String) {
         guard ready, !busy, let store else { return }
         busy = true
@@ -438,6 +621,10 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
 @MainActor
 struct EditorView: View {
     @StateObject private var model = NativeEditorModel()
+    private enum DirectoryAction { case exportCustomization, loadCustomization, backupDirectory }
+    @State private var directoryAction = DirectoryAction.exportCustomization
+    @State private var choosingDirectory = false
+    @State private var selectedBackup: DirectoryTools.Backup?
 
     var body: some View {
         TabView {
@@ -446,6 +633,24 @@ struct EditorView: View {
             settings().tabItem { Label("Settings", systemImage: "gearshape") }
             ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
             HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
+        }
+        .id(model.restoreRevision)
+        .fileImporter(isPresented: $choosingDirectory, allowedContentTypes: [.folder]) { result in
+            do {
+                let root = try result.get()
+                switch directoryAction {
+                case .exportCustomization: model.exportCustomization(root)
+                case .loadCustomization: model.loadCustomization(root)
+                case .backupDirectory: model.selectBackupDirectory(root)
+                }
+            } catch { model.status = error.localizedDescription }
+        }
+        .alert("Restore this backup?", isPresented: Binding(get: { selectedBackup != nil },
+            set: { if !$0 { selectedBackup = nil } }), presenting: selectedBackup) { backup in
+            Button("Restore", role: .destructive) { model.restoreBackup(backup) }
+            Button("Cancel", role: .cancel) {}
+        } message: { backup in
+            Text("Replace the current database, media and website customizations with \(backup.directory.lastPathComponent)? Unsaved edits will be discarded. Hosting credentials are unchanged.")
         }
         .sheet(item: $model.preview) { item in
             if item.path.isEmpty {
@@ -488,7 +693,7 @@ struct EditorView: View {
                     model.changed()
                 }
                 Button(isNews ? "Add news" : "Add page") {
-                    let node = model.newNode(isNews ? .news : .page, siblings: isNews ? model.news : model.pages)
+                    let node = model.newNode(isNews ? .news : .page, siblings: isNews ? model.news : model.pages, rootPage: !isNews)
                     if isNews { model.news.append(node) } else { model.pages.append(node) }
                     model.changed()
                 }
@@ -517,6 +722,12 @@ struct EditorView: View {
                         examples(title: "Templates")
                     }
                 }
+                if model.advancedUI {
+                    Section("Advanced directory tools") {
+                        NavigationLink("Templates and website assets") { customizations() }
+                        NavigationLink("Database and media backups") { backups() }
+                    }
+                }
             }
             .navigationTitle("Settings")
         }
@@ -527,7 +738,7 @@ struct EditorView: View {
             Text(model.status)
             if model.advancedUI {
                 Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
-                Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+                Text("Export templates and assets explicitly from Advanced settings. Upload webeasy_templates to your hosting to load its edited HTML here.")
             }
             if model.busy { ProgressView() }
             Section("Page templates") {
@@ -542,6 +753,41 @@ struct EditorView: View {
             }
         }
         .navigationTitle(title)
+    }
+
+    private func chooseDirectory(_ action: DirectoryAction) {
+        directoryAction = action; choosingDirectory = true
+    }
+
+    private func customizations() -> some View {
+        Form {
+            Text(model.status)
+            Text("Export editable templates and public website assets together. Edit the directory, then load both back. Native editor resources cannot be changed.")
+            Button("Export templates and assets to directory") { chooseDirectory(.exportCustomization) }
+                .disabled(!model.advancedUI || !model.ready || model.busy)
+            Button("Load templates and assets from directory") { chooseDirectory(.loadCustomization) }
+                .disabled(!model.advancedUI || !model.ready || model.busy)
+            Text("Normal website publishing exports required assets, not editable template-source copies.")
+            if model.busy { ProgressView() }
+        }.navigationTitle("Website customization")
+    }
+
+    private func backups() -> some View {
+        List {
+            Text(model.status)
+            Text("Back up saved SQLite content, customizations and all media to UTC datetime directories. Unsaved edits are not included.")
+            if let name = model.backupDirectoryName { Text("Directory: \(name)") }
+            Button("Choose backup directory") { chooseDirectory(.backupDirectory) }.disabled(model.busy)
+            Button("Back up now") { model.createBackup() }.disabled(!model.ready || model.busy)
+            Button("Refresh backups") { model.refreshBackups() }.disabled(model.busy)
+            Text("After a successful backup, verified app-owned backups older than two weeks are removed. Unrelated or modified directories are kept.")
+            ForEach(model.backups) { backup in
+                Button(backup.directory.lastPathComponent) { selectedBackup = backup }.disabled(model.busy)
+            }
+            if model.busy { ProgressView() }
+        }
+        .navigationTitle("Database and media backups")
+        .onAppear { model.refreshBackups() }
     }
 }
 
@@ -580,7 +826,7 @@ private struct NativeContentForm: View {
     }
 
     private func text(_ key: String) -> Binding<String> {
-        Binding(get: { node.fields[key] ?? "" }, set: { node.fields[key] = $0; model.changed() })
+        Binding(get: { node.fields[key] ?? "" }, set: { model.updateText(node, kind: kind, key: key, value: $0) })
     }
     private var date: Binding<Date> {
         let formatter = DateFormatter()

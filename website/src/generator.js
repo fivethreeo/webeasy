@@ -55,7 +55,7 @@ window.WebeasyGenerator = {
       const project = normalizeProject(input.project, sanitize, sanitizeShort);
       return { project, renderRequest: prepareSite(project, input.catalog, {
         publicPathPrefix: input.publicPathPrefix,
-      }), files: Object.entries(templateSources(input.catalog)).map(([path, html]) => ({ path, html })),
+      }), files: [],
       referencedMedia: referencedMedia(project, window) };
     });
   },
@@ -65,7 +65,7 @@ window.WebeasyGenerator = {
       const project = normalizeProject(input.project, sanitize, sanitizeShort);
       return { project, files: renderSite(project, input.catalog, {
         publicPathPrefix: input.publicPathPrefix,
-      }).concat(Object.entries(templateSources(input.catalog)).map(([path, html]) => ({ path, html }))),
+      }),
       referencedMedia: referencedMedia(project, window) };
     });
   },
