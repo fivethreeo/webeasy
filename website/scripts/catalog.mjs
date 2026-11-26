@@ -1,12 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { render, renderMaster, renderSection } from "../src/render.js";
+import { catalogPartials, render, renderMaster, renderSection, renderCatalog } from "../src/render.js";
 export { escapeHtml, render, renderMaster } from "../src/render.js";
 
-export function renderComponent(component, usedIds = new Set()) {
+export function renderComponent(component, usedIds = new Set(), partials = {}) {
   return component.id === "section"
-    ? renderSection(component.source, component.example, component.example.content, usedIds)
-    : render(component.source, component.example, component.example.content);
+    ? renderSection(component.source, component.example, component.example.content, usedIds, partials)
+    : renderCatalog(component.source, component.example, partials);
 }
 
 export async function loadCatalog(root) {
@@ -35,8 +35,9 @@ export async function loadCatalog(root) {
       entry.source = await readFile(path.join(root, entry.file), "utf8");
     }
   }
+  const partials = catalogPartials(catalog);
   for (const component of catalog.components) {
-    renderComponent(component);
+    renderComponent(component, new Set(), partials);
     for (const [key, value] of Object.entries(component.example)) {
       if (["src", "poster"].includes(key) &&
           (typeof value !== "string" || !/^assets\/[a-zA-Z0-9/_-]+\.[a-zA-Z0-9]+$/.test(value) ||
@@ -54,10 +55,10 @@ export async function loadCatalog(root) {
     const content = template.example.blocks.map((id) => {
       const component = catalog.components.find((item) => item.id === id);
       if (!component) throw new Error(`Unknown component: ${id}`);
-      return renderComponent(component, usedIds);
+      return renderComponent(component, usedIds, partials);
     }).join("\n");
-    if (template.id === "master") renderMaster(template.source, template.example, content, "<nav>Example menu</nav>");
-    else render(template.source, template.example, content);
+    if (template.id === "master") renderMaster(template.source, template.example, content, "<nav>Example menu</nav>", partials);
+    else render(template.source, template.example, content, partials);
   }
   return catalog;
 }

@@ -910,6 +910,16 @@ test("native generation engine normalizes content and renders portable website f
   expect(result.error).toBeUndefined();
   expect(result.files.some((file) => file.path === "about/team/index.html")).toBe(true);
   expect(result.files.find((file) => file.path === "news/index.html").html.match(/<article\b/g)).toHaveLength(3);
+  const prepared = await page.evaluate(({ project, catalog }) =>
+    JSON.parse(window.WebeasyGenerator.prepare(JSON.stringify({ project, catalog }))), { project, catalog });
+  expect(prepared.error).toBeUndefined();
+  expect(prepared.project).toEqual(result.project);
+  expect(prepared.referencedMedia).toEqual(result.referencedMedia);
+  expect(prepared.renderRequest.documents.map((document) => document.path))
+    .toEqual(result.files.filter((file) => !file.path.startsWith("webeasy_templates/")).map((file) => file.path));
+  expect(prepared.files.every((file) => file.path.startsWith("webeasy_templates/"))).toBe(true);
+  expect(prepared.renderRequest.partials["site-header"]).toContain("{{#menu}}");
+  expect(prepared.renderRequest.documents[0].values.page.sections[0].heading).toBeTruthy();
   const invalid = await page.evaluate(() => JSON.parse(window.WebeasyGenerator.normalize(JSON.stringify({
     version: 1, pages: [{ id: "invalid", title: "Bad slug", slug: "../escape", date: "2026-01-01" }], news: [], media: [],
   }))));

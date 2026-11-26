@@ -827,15 +827,16 @@ class MainActivity : ComponentActivity() {
         if (publish && destination == null) { busy = false; status = "Import your hosting setup QR first."; return }
         val input = if (compile) JSONObject().put("project", project).put("catalog", catalog) else project!!
         if (compile && destination != null) input.put("publicPathPrefix", destination.optString("publicPathPrefix"))
-        generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "compile" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
+        generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "prepare" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
             val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }
             if (output.isFailure || output.getOrNull()?.has("error") == true) {
                 status = output.getOrNull()?.optString("error") ?: "Cannot generate content."; busy = false
                 return@evaluateJavascript
             }
-            val result = output.getOrThrow()
+            val prepared = output.getOrThrow()
             worker.execute {
                 runCatching {
+                    val result = if (compile) NativeRenderer.compile(prepared) else prepared
                     if (!compile || export || publish) {
                         store.save(result.getJSONObject("project"))
                         runOnUiThread {

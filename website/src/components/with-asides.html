@@ -1,0 +1,7 @@
+{{#hasAsides}}
+<div class="with-sidebar with-sidebar:right">
+  <div class="stack content-main">{{{content}}}</div>
+  <div class="stack content-asides">{{#asides}}{{>aside}}{{/asides}}</div>
+</div>
+{{/hasAsides}}
+{{^hasAsides}}{{{content}}}{{/hasAsides}}

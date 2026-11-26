@@ -4,17 +4,24 @@ import { fileURLToPath } from "node:url";
 import { escapeHtml, loadCatalog, render, renderMaster, renderComponent } from "./catalog.mjs";
 import { loadProject } from "./content.mjs";
 import { renderSite } from "../src/content-model.js";
+import { catalogPartials } from "../src/render.js";
 
 const website = fileURLToPath(new URL("../", import.meta.url));
 const source = path.join(website, "src");
 export async function generate(development = false) {
 const output = path.join(website, development ? ".preview" : "dist");
 const catalog = await loadCatalog(source);
+const partials = catalogPartials(catalog);
 await mkdir(path.join(output, "assets"), { recursive: true });
 await mkdir(path.join(output, "examples"), { recursive: true });
 await mkdir(path.join(output, "components"), { recursive: true });
 
 await cp(path.join(source, "assets"), path.join(output, "assets"), { recursive: true });
+const rendererLicenses = await Promise.all([
+  ["Mustach 1.2.10 (0BSD)", "../shared/renderer/vendor/mustach/LICENSE.txt"],
+  ["cJSON 1.7.19 (MIT)", "../shared/renderer/vendor/cjson/LICENSE"],
+].map(async ([name, file]) => `${name}\n${await readFile(path.join(website, file), "utf8")}`));
+await writeFile(path.join(output, "renderer-licenses.txt"), rendererLicenses.join("\n"));
 
 function document(title, content, prefix = "../") {
   return `<!doctype html>
@@ -45,7 +52,7 @@ const cards = (entries) => entries.map((entry) =>
 
 for (const component of catalog.components) {
   component.preview = `components/${component.id}.html`;
-  const example = renderComponent(component);
+  const example = renderComponent(component, new Set(), partials);
   await writeFile(path.join(output, component.preview), document(component.title,
     `<header class="stack"><h1>${escapeHtml(component.title)}</h1><p>${escapeHtml(component.description)}</p></header>
     ${example}`));
@@ -55,12 +62,12 @@ for (const template of catalog.templates) {
   const usedIds = new Set();
   const content = template.example.blocks.map((id) => {
     const component = catalog.components.find((item) => item.id === id);
-    return renderComponent(component, usedIds);
+    return renderComponent(component, usedIds, partials);
   }).join("\n");
   await writeFile(path.join(output, template.preview),
     template.id === "master"
-      ? renderMaster(template.source, { ...template.example, baseHref: "../" }, content, "<nav>Example menu</nav>")
-      : document(template.title, render(template.source, template.example, content)));
+      ? renderMaster(template.source, { ...template.example, baseHref: "../" }, content, "<nav>Example menu</nav>", partials)
+      : document(template.title, render(template.source, template.example, content, partials)));
 }
 await writeFile(path.join(output, "index.html"), document("Templates",
   `<header class="stack"><p class="eyebrow">Webeasy</p><h1>Small pages. Yours to publish.</h1><p>Explore every page template and the content blocks your app will insert.</p></header>

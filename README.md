@@ -51,7 +51,7 @@ apps/ios/       SwiftUI app, generated with XcodeGen (iOS 17+)
 apps/android/   Kotlin / Jetpack Compose app (Android 8+)
 website/        Independently built website HTML, CSS, JavaScript, and media
 scripts/        Packaging and integration tests
-shared/         Relational SQLite schema used by both apps
+shared/         SQLite schema and shared C/Mustach renderer
 ```
 
 The native tooling follows `../blakken-project`, without its backend dependencies
@@ -60,7 +60,9 @@ the reference project's Every Layout CSS primitives. There is no backend.
 
 ## Website build and preview
 
-Requires Node.js 22+, npm, and Python 3 for the publisher tests.
+Requires Node.js 22+, npm, Emscripten 4.0.20 (`emcc`), a host C compiler (`cc`),
+and Python 3 for the publisher tests. Set `EMCC` to the compiler path if it is not
+on `PATH`. CI installs the pinned WebAssembly toolchain.
 
 ```sh
 npm ci
@@ -108,14 +110,39 @@ next publish use them. This loads existing registered templates, not new catalog
 entries. Each file is limited to 256 KiB. Loading templates does not save or
 replace your page/news content.
 
-Use `{{field}}` for escaped plain text or attribute values. Templates and structured components
-may use `{{{content}}}` to insert trusted, rendered content HTML. Templates and
-component HTML are trusted code from your bundle or your own hosting. The master
-template supplies the outer document and additionally accepts
-`{{{navigation}}}` for the generated main menu, `{{title}}`, and `{{baseHref}}`.
-Keep `{{{content}}}` in every page template. Keep the master template's base URL,
-local stylesheet/script references and Content Security Policy unless you
-deliberately want to change those behaviors.
+The engine is Mustach 1.2.10 (0BSD) with cJSON 1.7.19 (MIT), vendored under
+`shared/renderer/vendor/` with their original notices. Builds also package
+`renderer-licenses.txt` into both apps. The same C implementation runs through
+JNI on Android, directly from Swift on iOS, and as WebAssembly in the browser and
+Node build. There is no filesystem lookup or executable template code.
+
+Use `{{field}}` for escaped text/attributes, `{{#items}}...{{/items}}` for loops
+or conditions, `{{^items}}...{{/items}}` for empty/false cases, and `{{>name}}` for
+catalog partials. Dotted names access nested data. Raw interpolation is restricted
+to `{{{html}}}` (sanitized rich text), `{{{content}}}` (composed content), and
+`{{{navigation}}}` (composed navigation). Plain text such as titles cannot bypass
+escaping. Unknown fields/partials, malformed sections, oversized output and
+excessive nesting fail the whole render instead of producing a partial website.
+
+Page/news layouts receive structured `sections`, `asides`, `cover`, `children`
+(page links), and `html`, alongside their title/date metadata. Sections expose
+`heading`, `headingId`, `subheading`, `html`, and `asides`. Covers expose `src`
+and `alt`. News listings expose `items` (latest three) and `allItems` (all sorted
+summaries), each with `href`, title, date, rich `html`, and an optional cover.
+The master also receives `page` or `news` data, `menu`, `homeHref`, current/active
+states, `title`, and `baseHref`.
+
+The `site-header`, `navigation-item`, `breadcrumbs`, `subpage-navigation`,
+`subpage-item`, `page-content`, `body`, `main-content`, `with-asides`, `section`,
+`aside`, `cover-image`, `rich-content`, `news-list`, `news-summary`, `news-empty`,
+and `site-footer` partials own the published markup. Existing `{{{content}}}`
+and `{{{navigation}}}` layouts continue working; new layouts can instead loop
+over structured data and compose partials directly. A content slot is no longer
+mandatory. The footer is empty until customized.
+
+Templates are trusted code from your bundle or your own hosting. Keep the master
+template's base URL, local stylesheet/script references and Content Security
+Policy unless you deliberately want to change those behaviors.
 Add your styles and scripts in `website/src/site.css` and `site.js`, and bundled
 media in `website/src/assets/`. Example media paths are relative to the site root.
 The video example deliberately has a poster but no clip; it is a placeholder
@@ -129,6 +156,13 @@ slugs, with per-document collisions numbered `-1`, `-2`, and so on.
 The generated `catalog.json` includes HTML source, example data, and preview paths
 for both native clients and future editing/generation code. All previews use the
 same bundled CSS/JS and media, with no CDN dependencies.
+
+Native publishing still uses the shared JavaScript sanitizer/normalizer to
+prepare validated template data; HTML generation itself is C. The helper
+WebView therefore remains for normalization and other existing utilities.
+`npm run build:renderer` rebuilds the ignored WebAssembly module after C changes.
+The editor/helper CSP allows WebAssembly compilation without allowing JavaScript
+`eval`; published pages retain their existing stricter CSP.
 
 ## iOS
 
@@ -145,12 +179,17 @@ open Webeasy.xcodeproj
 Choose your development team for device signing. A pre-build phase rebuilds and
 packages the website, so CSS/JS and catalog edits are included in the next app build.
 Packaging before XcodeGen is required so the resource directory exists.
-Xcode must be able to find `node` and `npm` in its build environment.
+Xcode must be able to find `node`, `npm`, and Emscripten 4.0.20 (`emcc`) in its
+build environment for the bundled browser assets. The app itself compiles the
+shared C renderer directly through its Swift bridging header.
 Website resources are a folder reference, preserving relative media and page paths.
 
 ## Android
 
-Requires JDK 17+ and Android SDK 35. The wrapper downloads Gradle 8.9.
+Requires JDK 17+, Android SDK 35, NDK 27.0.12077973, and CMake 3.22.1.
+The wrapper downloads Gradle 8.9; Gradle can install the pinned native tools when
+their Android SDK licenses are accepted. Bundling browser assets also requires
+Emscripten 4.0.20 (`emcc`).
 
 ```sh
 npm ci
@@ -160,6 +199,8 @@ cd apps/android
 
 Set `ANDROID_HOME` or provide `local.properties` with your SDK location.
 The Android `preBuild` task rebuilds and packages the website automatically.
+Generated pages are rendered by the shared C library through JNI on a worker;
+the helper WebView still normalizes and sanitizes content before rendering.
 The APK is generated in `app/build/outputs/apk/debug/`.
 Previews use AndroidX WebKit's local HTTPS asset loader, not unrestricted file URLs.
 

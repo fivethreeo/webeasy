@@ -1,4 +1,6 @@
-import { escapeHtml, render, renderMaster, renderSection } from "./render.js";
+import { escapeHtml, catalogPartials } from "./render.js";
+import { renderRequest } from "./c-renderer.js";
+import { uniqueHeadingId } from "./heading-id.js";
 import { localMediaPath, safeLinkHref } from "./rich-text.js";
 import { normalizePublishingSettings } from "./publishing-settings.js";
 
@@ -128,18 +130,7 @@ function rich(html, homeHref) {
       const home = /^(?:\/|(?:\.\/)?index\.html)([?#].*)?$/.exec(value);
       return home ? `${space}${name}${equals}${quote}${escapeHtml(homeHref)}${home[1] ?? ""}${quote}` : attribute;
     })) : html;
-  return `<div class="stack rich-content">${content}</div>`;
-}
-
-function withAsides(content, asides, catalog, homeHref) {
-  if (!asides.length) return content;
-  const source = catalog.components.find((item) => item.id === "aside")?.source;
-  if (!source) throw new Error("The aside component is missing.");
-  return `<div class="with-sidebar with-sidebar:right">
-    <div class="stack content-main">${content}</div>
-    <div class="stack content-asides">${asides.map((aside) => render(source,
-      { heading: aside.heading }, `${aside.heading ? `<h3>${escapeHtml(aside.heading)}</h3>` : ""}${rich(aside.content, homeHref)}`)).join("\n")}</div>
-  </div>`;
+  return content;
 }
 
 function coverMedia(record, media = []) {
@@ -151,101 +142,114 @@ function coverMedia(record, media = []) {
   return image;
 }
 
-function coverMarkup(record, media) {
-  const image = coverMedia(record, media);
-  return image ? rich(`<figure class="stack cover-image"><img src="media/${escapeHtml(image.filename)}" alt="${escapeHtml(record.coverAlt ?? "")}"></figure>`) : "";
-}
-
-function body(record, catalog, media, homeHref) {
-  const source = catalog.components.find((item) => item.id === "section")?.source;
-  if (record.sections.length && !source) throw new Error("The section component is missing.");
-  const usedIds = new Set();
-  const sections = record.sections.map((section) => renderSection(source, section,
-    withAsides(rich(section.content, homeHref), section.asides, catalog, homeHref), usedIds)).join("\n");
-  return coverMarkup(record, media) + withAsides(`${rich(record.content ?? record.shortContent, homeHref)}${sections}`, record.asides, catalog, homeHref);
-}
-
-function menu(pages, activeId, currentId, homeId) {
-  return pages.filter((page) => page.id !== homeId).map((page) => {
-    return `<li><a href="${page.slug}/"${page.id === activeId ? ' class="active"' : ""}${page.id === currentId ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a></li>`;
-  }).join("\n");
-}
-
-function subpageNavigation(entry, homeId) {
+function subpageItems(entry, homeId) {
   const top = entry.ancestors[0] ?? entry.record;
-  if (!top.children.length) return "";
   const active = new Set([...entry.ancestors.map((page) => page.id), entry.record.id]);
-  const items = (pages, prefix) => pages.map((page) => {
+  const items = (pages, prefix) => pages.flatMap((page) => {
     const route = `${prefix}${page.slug}/`;
     if (page.id === homeId) return items(page.children, route);
-    return `<li><a href="${route}"${active.has(page.id) ? ' class="active"' : ""}${page.id === entry.record.id ? ' aria-current="page"' : ""}>${escapeHtml(page.menuTitle)}</a>${page.children.length ? `<ul class="stack">${items(page.children, route)}</ul>` : ""}</li>`;
-  }).join("\n");
-  const children = items(top.children, `${top.slug}/`);
-  if (!children.trim()) return "";
-  return `<aside class="stack box content-asides subpage-navigation"><nav class="stack" aria-label="Subpages">
-    <h2>Subpages</h2><ul class="stack">${children}</ul></nav></aside>`;
+    const children = items(page.children, route);
+    return [{ id: page.id, title: page.title, menuTitle: page.menuTitle, href: route,
+      active: active.has(page.id), current: page.id === entry.record.id,
+      children, hasChildren: children.length > 0 }];
+  });
+  return items(top.children, `${top.slug}/`);
 }
 
-export function renderSite(project, catalog, options = {}) {
+const composed = (template, values) => ({ $render: template, values });
+
+export function prepareSite(project, catalog, options = {}) {
   const { publicPathPrefix } = normalizePublishingSettings({ publicPathPrefix: options.publicPathPrefix });
   const homeHref = options.homeHref ?? (publicPathPrefix || "./");
   if (homeHref !== "./" && !safeLinkHref(homeHref)) throw new Error("Invalid website home URL.");
-  const template = (id) => {
-    const source = catalog.templates.find((item) => item.id === id)?.source;
-    if (!source) throw new Error(`Template is missing: ${id}`);
-    return source;
-  };
+  const partials = catalogPartials(catalog);
   const pageTemplate = (record) => {
     const id = record.templateId ?? "page";
     if (id !== "page" && !catalog.templates.some((entry) => entry.id === id && entry.pageLayout === true)) {
       throw new Error(`Unavailable page layout: ${id}`);
     }
-    return template(id);
+    if (!partials[id]) throw new Error(`Template is missing: ${id}`);
+    return id;
   };
-  const files = [];
+  const documents = [];
   const pages = pageRoutes(project.pages);
   const homeEntry = pages.find((entry) => entry.record.id === project.homePageId) ?? pages[0];
   const home = homeEntry?.record;
-  const pageContent = (entry) => {
-    const article = render(pageTemplate(entry.record), entry.record, body(entry.record, catalog, project.media, homeHref));
-    const aside = subpageNavigation(entry, home?.id);
-    return aside ? `<div class="with-sidebar with-sidebar:right"><div class="stack content-main">${article}</div>${aside}</div>` : article;
+  const routes = new Map(pages.map((entry) => [entry.record.id, href(entry.route)]));
+  const pageLink = (page) => ({ id: page.id, title: page.title, menuTitle: page.menuTitle,
+    slug: page.slug, date: page.date, href: routes.get(page.id) });
+  const asideData = (asides = []) => asides.map((aside) => {
+    const html = rich(aside.content, homeHref);
+    return { ...aside, html, content: composed("rich-content", { html }) };
+  });
+  const recordData = (record) => {
+    const usedIds = new Set();
+    const sections = (record.sections ?? []).map((section) => {
+      const html = rich(section.content, homeHref);
+      const asides = asideData(section.asides);
+      const values = { html, asides, hasAsides: asides.length > 0, content: composed("rich-content", { html }) };
+      return { ...section, ...values, headingId: uniqueHeadingId(section.heading, usedIds),
+        subheading: (section.subheading ?? "").trim(), content: composed("with-asides", values) };
+    });
+    const image = coverMedia(record, project.media);
+    const html = rich(record.content ?? record.shortContent, homeHref);
+    const asides = asideData(record.asides);
+    const values = { ...record, children: (record.children ?? []).map(pageLink),
+      html, sections, asides, hasAsides: asides.length > 0,
+      cover: image ? { src: `media/${image.filename}`, alt: record.coverAlt ?? "" } : null,
+      content: composed("main-content", { html, sections }) };
+    return { ...values, content: composed("body", values) };
   };
-  const document = (title, content, file, currentId = null) => {
+  const pageContent = (entry, breadcrumbs = false) => {
+    const subpages = subpageItems(entry, home?.id);
+    return composed("page-content", {
+      menuTitle: entry.record.menuTitle, hasSubpages: subpages.length > 0, subpages,
+      hasBreadcrumbs: breadcrumbs && entry.ancestors.length > 0,
+      breadcrumbs: entry.ancestors.map((ancestor, index) => ({ ...pageLink(ancestor),
+        href: `${entry.ancestors.slice(0, index + 1).map((item) => item.slug).join("/")}/` })),
+      content: composed(pageTemplate(entry.record), recordData(entry.record)),
+    });
+  };
+  const document = (title, content, file, currentId = null, extra = {}) => {
     const prefix = "../".repeat(file.split("/").length - 1) || "./";
     const current = pages.find((entry) => entry.record.id === currentId);
     const activeId = current?.ancestors[0]?.id ?? currentId;
     const newsIndex = file === "news/index.html" || (file === "index.html" && !pages.length);
     const newsActive = newsIndex || file.startsWith("news/");
-    const navigation = `<header class="cluster site-header">
-    <a class="site-logo" href="${escapeHtml(homeHref)}" aria-label="Home"${currentId === home?.id && home ? ' aria-current="page"' : ""}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
-    <nav class="site-menu" aria-label="Main menu"><ul class="cluster">${menu(project.pages, activeId, currentId, home?.id)}
-    <li><a href="news/"${newsActive ? ' class="active"' : ""}${newsIndex ? ' aria-current="page"' : ""}>News</a></li></ul></nav></header>`;
-    return renderMaster(template("master"), { title, baseHref: prefix }, content, navigation);
+    const navigation = { homeHref, homeCurrent: currentId === home?.id && Boolean(home), newsActive, newsCurrent: newsIndex,
+      menu: project.pages.filter((page) => page.id !== home?.id).map((page) => ({
+        ...pageLink(page), active: page.id === activeId, current: page.id === currentId,
+      })) };
+    documents.push({ path: file, template: "master", values: { ...extra, ...navigation, title, baseHref: prefix,
+      content, navigation: composed("site-header", navigation) } });
   };
   for (const page of pages) {
     const file = `${href(page.route)}index.html`;
-    const breadcrumbs = page.ancestors.length
-      ? `<nav aria-label="Breadcrumb"><ol class="cluster">${page.ancestors.map((ancestor, index) =>
-        `<li><a href="${page.ancestors.slice(0, index + 1).map((item) => item.slug).join("/")}/">${escapeHtml(ancestor.menuTitle)}</a></li>`).join("")
-        }<li>${escapeHtml(page.record.menuTitle)}</li></ol></nav>` : "";
-    files.push({ path: file, html: document(page.record.title,
-      breadcrumbs + pageContent(page), file, page.record.id) });
+    document(page.record.title, pageContent(page, true), file, page.record.id, { page: recordData(page.record) });
   }
   const news = sortedNews(project.news);
   for (const item of news) {
     const file = `news/${item.date}/${item.slug}/index.html`;
-    files.push({ path: file, html: document(item.title,
-      render(template("news"), item, body(item, catalog, project.media, homeHref)), file) });
+    const article = recordData(item);
+    document(item.title, composed("news", article), file, null, { news: article });
   }
-  const articles = news.slice(0, 3).map((item) => `<article class="stack news-summary">
-    <header class="stack"><h2><a href="news/${item.date}/${item.slug}/">${escapeHtml(item.title)}</a></h2>
-    <time datetime="${item.date}">${item.date}</time></header>${coverMarkup(item, project.media)}${rich(item.shortContent, homeHref)}</article>`).join("\n");
-  const listing = render(template("news-index"), {}, articles || "<p>No news yet.</p>");
-  files.push({ path: "news/index.html", html: document("News", listing, "news/index.html") });
+  const allItems = news.map((item) => {
+    const image = coverMedia(item, project.media);
+    return { id: item.id, title: item.title, date: item.date, slug: item.slug,
+      html: rich(item.shortContent, homeHref), shortContent: item.shortContent,
+      cover: image ? { src: `media/${image.filename}`, alt: item.coverAlt ?? "" } : null,
+      href: `news/${item.date}/${item.slug}/` };
+  });
+  const listingValues = { items: allItems.slice(0, 3), allItems };
+  const listing = composed("news-index", { ...listingValues, content: composed("news-list", listingValues) });
+  document("News", listing, "news/index.html", null, listingValues);
   const homepage = homeEntry ? pageContent(homeEntry) : listing;
-  files.push({ path: "index.html", html: document(home?.title ?? "News", homepage, "index.html", home?.id) });
-  return files;
+  document(home?.title ?? "News", homepage, "index.html", home?.id, home ? { page: recordData(home) } : listingValues);
+  return { partials, documents, rawSlots: ["content", "navigation", "html"] };
+}
+
+export function renderSite(project, catalog, options = {}) {
+  return renderRequest(prepareSite(project, catalog, options));
 }
 
 export function referencedMedia(project, window) {

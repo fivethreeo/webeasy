@@ -25,7 +25,7 @@ test("native packages contain the entire generated site byte-for-byte", async ()
   assert.ok(expected.includes("assets/site.css"));
   assert.ok(expected.includes("assets/site.js"));
   for (const file of ["editor.html", "assets/editor.js", "assets/editor.css", "field.html", "assets/field.js", "assets/field.css",
-    "generator.html", "assets/generator.js", "content.json", "storage.sql",
+    "generator.html", "assets/generator.js", "content.json", "storage.sql", "renderer-licenses.txt",
     "about/team/index.html", "news/index.html", "news/2026-11-24/simpler-publishing/index.html"]) assert.ok(expected.includes(file), file);
   assert.ok(!expected.includes("provision.html"));
   assert.ok(!expected.includes("assets/provision.js"));

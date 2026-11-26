@@ -12,8 +12,10 @@ apps/android/.gradle/
 apps/android/.kotlin/
 apps/android/local.properties
 apps/android/**/build/
+apps/android/**/.cxx/
 .DS_Store
 dist/
+website/src/generated/
 __pycache__/
 .venv-publish/
 .venv-dev-host/

@@ -4,13 +4,6 @@ import UIKit
 import UniformTypeIdentifiers
 import ImageIO
 
-enum ContentError: LocalizedError {
-    case invalid(String)
-    var errorDescription: String? {
-        switch self { case .invalid(let message): message }
-    }
-}
-
 final class ContentStore: @unchecked Sendable {
     let websiteRoot: URL
     let mediaDirectory: URL

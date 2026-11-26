@@ -20,6 +20,10 @@ targets:
       - package: Citadel
     sources:
       - Sources
+      - path: ../../shared/renderer/renderer.c
+      - path: ../../shared/renderer/renderer.h
+      - path: ../../shared/renderer/vendor/mustach/mustach.c
+      - path: ../../shared/renderer/vendor/cjson/cJSON.c
       - path: Resources/Website
         type: folder
         buildPhase: resources
@@ -34,6 +38,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: no.webeasy.app
         SWIFT_VERSION: "6.0"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Webeasy-Bridging-Header.h
+        GCC_C_LANGUAGE_STANDARD: c11
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - "$(inherited)"
+          - NO_OPEN_MEMSTREAM
+        HEADER_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../../shared/renderer"
+          - "$(SRCROOT)/../../shared/renderer/vendor/mustach"
+          - "$(SRCROOT)/../../shared/renderer/vendor/cjson"
         MARKETING_VERSION: "0.1.20"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES

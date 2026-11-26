@@ -41,7 +41,7 @@ test("missing, empty, malformed, oversized and unexpected files fail as a comple
   for (const modify of [
     (sources) => { delete sources["webeasy_templates/templates/master.html"]; },
     (sources) => { sources["webeasy_templates/templates/page.html"] = ""; },
-    (sources) => { sources["webeasy_templates/templates/page.html"] = "<p>No content slot</p>"; },
+    (sources) => { sources["webeasy_templates/templates/page.html"] = "{{#sections}}Missing closing section"; },
     (sources) => { sources["webeasy_templates/templates/page.html"] = "{{{title}}}{{{content}}}"; },
     (sources) => { sources["webeasy_templates/templates/page.html"] = `${"é".repeat(131073)}{{{content}}}`; },
     (sources) => { sources["webeasy_templates/templates/page.html"] = "{{unknown}}{{{content}}}"; },

@@ -1,5 +1,5 @@
 import { createRichTextSanitizer } from "./rich-text.js";
-import { normalizeProject, renderSite, referencedMedia } from "./content-model.js";
+import { normalizeProject, prepareSite, renderSite, referencedMedia } from "./content-model.js";
 import { readConnectionQR } from "./connection.mjs";
 import { normalizePublishingSettings } from "./publishing-settings.js";
 import { projectChanges } from "./content-changes.js";
@@ -48,6 +48,16 @@ window.WebeasyGenerator = {
   },
   normalize(serialized) {
     return result(() => ({ project: normalizeProject(JSON.parse(serialized), sanitize, sanitizeShort) }));
+  },
+  prepare(serialized) {
+    return result(() => {
+      const input = JSON.parse(serialized);
+      const project = normalizeProject(input.project, sanitize, sanitizeShort);
+      return { project, renderRequest: prepareSite(project, input.catalog, {
+        publicPathPrefix: input.publicPathPrefix,
+      }), files: Object.entries(templateSources(input.catalog)).map(([path, html]) => ({ path, html })),
+      referencedMedia: referencedMedia(project, window) };
+    });
   },
   compile(serialized) {
     return result(() => {

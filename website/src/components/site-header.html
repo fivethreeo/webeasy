@@ -1,0 +1,7 @@
+<header class="cluster site-header">
+  <a class="site-logo" href="{{homeHref}}" aria-label="Home"{{#homeCurrent}} aria-current="page"{{/homeCurrent}}><img src="assets/logo.svg" width="80" height="64" alt=""></a>
+  <nav class="site-menu" aria-label="Main menu"><ul class="cluster">
+    {{#menu}}{{>navigation-item}}{{/menu}}
+    <li><a href="news/"{{#newsActive}} class="active"{{/newsActive}}{{#newsCurrent}} aria-current="page"{{/newsCurrent}}>News</a></li>
+  </ul></nav>
+</header>

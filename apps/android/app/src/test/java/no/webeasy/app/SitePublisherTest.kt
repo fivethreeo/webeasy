@@ -117,7 +117,9 @@ class SitePublisherTest {
             root.resolve("site/preview/build/$page").writeText("x".repeat(256 * 1024 + 1))
             assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
             root.resolve("site/preview/build/$page").delete()
-            assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
+            val missing = assertThrows(IOException::class.java) { SitePublisher.loadTemplates(destination, listOf(master, page)) }
+            assertTrue(missing.message!!.contains("publish once with this app version"))
+            assertTrue(missing.message!!.contains("existing server edits are preserved"))
             assertThrows(IllegalArgumentException::class.java) { SitePublisher.loadTemplates(destination, listOf("../secret.html")) }
             assertEquals("Old home", root.resolve("site/index.html").readText())
         }

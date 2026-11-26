@@ -86,7 +86,7 @@
       "title": "Aside",
       "description": "An optional aside belonging to a page, news item, or section.",
       "file": "components/aside.html",
-      "example": { "heading": "A related note", "content": "<h3>A related note</h3><p>An aside belongs to its parent.</p>" }
+      "example": { "heading": "A related note", "content": "<p>An aside belongs to its parent.</p>" }
     },
     {
       "id": "text",
@@ -97,6 +97,71 @@
         "heading": "Make room for a little adventure",
         "body": "A walk by the sea, a shared meal, and a story worth remembering. Edit this text in your own project."
       }
+    },
+      {
+        "id": "site-header", "title": "Site header", "description": "Logo and main navigation, shared by every page.",
+        "file": "components/site-header.html",
+        "example": { "homeHref": "./", "homeCurrent": true, "menu": [], "newsActive": false, "newsCurrent": false }
+      },
+      {
+        "id": "navigation-item", "title": "Menu item", "description": "A main-menu link and its active and current-page states.",
+        "file": "components/navigation-item.html",
+        "example": { "href": "about/", "menuTitle": "About", "active": true, "current": true }
+      },
+      {
+        "id": "breadcrumbs", "title": "Breadcrumbs", "description": "Ancestor links for nested pages.",
+        "file": "components/breadcrumbs.html",
+        "example": { "hasBreadcrumbs": true, "menuTitle": "Team", "breadcrumbs": [{ "href": "about/", "menuTitle": "About" }] }
+      },
+      {
+        "id": "subpage-navigation", "title": "Subpage navigation", "description": "The related-pages sidebar.",
+        "file": "components/subpage-navigation.html",
+        "example": { "hasSubpages": true, "subpages": [{ "href": "about/team/", "menuTitle": "Team", "active": true, "current": true, "children": [], "hasChildren": false }] }
+      },
+      {
+        "id": "subpage-item", "title": "Subpage item", "description": "A recursive nested-navigation link.",
+        "file": "components/subpage-item.html",
+        "example": { "href": "about/team/", "menuTitle": "Team", "active": true, "current": true, "children": [], "hasChildren": false }
+      },
+      {
+        "id": "rich-content", "title": "Rich-content wrapper", "description": "The layout around sanitized rich text.",
+        "file": "components/rich-content.html", "example": { "html": "<p>Your content, your layout.</p>" }
+      },
+      {
+        "id": "cover-image", "title": "Cover image", "description": "Cover markup for pages, stories and news summaries.",
+        "file": "components/cover-image.html", "example": { "cover": { "src": "assets/coast.svg", "alt": "Illustrated coast" } }
+      },
+      {
+        "id": "with-asides", "title": "Aside layout", "description": "The optional sidebar around content.",
+        "file": "components/with-asides.html", "example": { "hasAsides": true, "content": "<p>Main content.</p>", "asides": [{ "heading": "A note", "content": "<p>Related content.</p>" }] }
+      },
+      {
+        "id": "main-content", "title": "Main content", "description": "Rich text followed by structured sections.",
+        "file": "components/main-content.html", "example": { "html": "<p>Main content.</p>", "sections": [] }
+      },
+      {
+        "id": "body", "title": "Content body", "description": "Cover, main content and optional related notes.",
+        "file": "components/body.html", "example": { "cover": null, "content": "<p>Main content.</p>", "hasAsides": false, "asides": [] }
+      },
+      {
+        "id": "page-content", "title": "Page composition", "description": "Breadcrumbs, page layout and optional subpage navigation.",
+        "file": "components/page-content.html", "example": { "hasBreadcrumbs": false, "hasSubpages": false, "content": "<p>Page content.</p>" }
+      },
+      {
+        "id": "news-summary", "title": "News summary", "description": "A news card with title, date, optional cover and rich summary.",
+        "file": "components/news-summary.html", "example": { "href": "news/2026-11-24/example/", "title": "A new story", "date": "2026-11-24", "cover": null, "html": "<p>A short introduction.</p>" }
+      },
+      {
+        "id": "news-list", "title": "News list", "description": "Loops over recent news, with a template-controlled empty state.",
+        "file": "components/news-list.html", "example": { "items": [] }
+      },
+      {
+        "id": "news-empty", "title": "Empty news", "description": "The message shown when there are no news items.",
+        "file": "components/news-empty.html", "example": {}
+      },
+      {
+        "id": "site-footer", "title": "Site footer", "description": "An optional footer shared by every page.",
+        "file": "components/site-footer.html", "example": {}
     },
     {
       "id": "image",

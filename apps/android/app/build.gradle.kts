@@ -13,6 +13,7 @@ val packageWebsite by tasks.registering(Exec::class) {
 android {
     namespace = "no.webeasy.app"
     compileSdk = 35
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         applicationId = "no.webeasy.app"
@@ -33,6 +34,13 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/websiteAssets"))

@@ -1,4 +1,4 @@
-import { render, renderMaster, renderSection } from "./render.js";
+import { catalogPartials, render, renderMaster, renderSection, renderCatalog } from "./render.js";
 
 export const templateDirectory = "webeasy_templates";
 export const maximumTemplateBytes = 256 * 1024;
@@ -28,26 +28,24 @@ export function loadTemplateSources(catalog, sources) {
       if (typeof source !== "string" || !source.trim() || new TextEncoder().encode(source).length > maximumTemplateBytes) {
         throw new Error(`Missing, empty or oversized template: ${entry.id}`);
       }
-      if (!source.includes("{{{content}}}") && group === "templates") {
-        throw new Error(`Template must retain {{{content}}}: ${entry.id}`);
-      }
       entry.source = source;
     }
   }
+  const partials = catalogPartials(updated);
   for (const entry of updated.components) {
-    if (entry.id === "section") renderSection(entry.source, entry.example, entry.example.content);
-    else render(entry.source, entry.example, entry.example.content);
+    if (entry.id === "section") renderSection(entry.source, entry.example, entry.example.content, new Set(), partials);
+    else renderCatalog(entry.source, entry.example, partials);
   }
   for (const entry of updated.templates) {
     const content = entry.example.blocks.map((id) => {
       const component = updated.components.find((item) => item.id === id);
       if (!component) throw new Error(`Missing example component: ${id}`);
       return component.id === "section"
-        ? renderSection(component.source, component.example, component.example.content)
-        : render(component.source, component.example, component.example.content);
+        ? renderSection(component.source, component.example, component.example.content, new Set(), partials)
+        : renderCatalog(component.source, component.example, partials);
     }).join("\n");
-    if (entry.id === "master") renderMaster(entry.source, entry.example, content, "<nav>Example menu</nav>");
-    else render(entry.source, entry.example, content);
+    if (entry.id === "master") renderMaster(entry.source, entry.example, content, "<nav>Example menu</nav>", partials);
+    else render(entry.source, entry.example, content, partials);
   }
   return updated;
 }
@@ -56,13 +54,14 @@ export function templatePreview(catalog, id) {
   const entry = catalog.templates.find((item) => item.id === id);
   if (!entry) throw new Error("Template is missing.");
   const usedIds = new Set();
+  const partials = catalogPartials(catalog);
   const content = entry.example.blocks.map((block) => {
     const component = catalog.components.find((item) => item.id === block);
     return component.id === "section"
-      ? renderSection(component.source, component.example, component.example.content, usedIds)
-      : render(component.source, component.example, component.example.content);
+      ? renderSection(component.source, component.example, component.example.content, usedIds, partials)
+      : renderCatalog(component.source, component.example, partials);
   }).join("\n");
   const master = catalog.templates.find((item) => item.id === "master");
-  const body = id === "master" ? content : render(entry.source, entry.example, content);
-  return renderMaster(master.source, { title: entry.title, baseHref: "./" }, body, "<nav>Example menu</nav>");
+  const body = id === "master" ? content : render(entry.source, entry.example, content, partials);
+  return renderMaster(master.source, { title: entry.title, baseHref: "./" }, body, "<nav>Example menu</nav>", partials);
 }

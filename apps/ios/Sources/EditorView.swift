@@ -232,12 +232,19 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         let serialized = String(decoding: data, as: UTF8.self)
         let argument = try JSONSerialization.data(withJSONObject: serialized, options: .fragmentsAllowed)
         let value = try await generator.evaluateJavaScript(
-            "window.WebeasyGenerator.\(compile ? "compile" : "normalize")(\(String(decoding: argument, as: UTF8.self)))")
+            "window.WebeasyGenerator.\(compile ? "prepare" : "normalize")(\(String(decoding: argument, as: UTF8.self)))")
         guard let result = value as? String, let data = result.data(using: .utf8),
               let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ContentError.invalid("Cannot generate website content.")
         }
         if let error = output["error"] as? String { throw ContentError.invalid(error) }
+        if compile {
+            let rendered = try await Task.detached { try NativeRenderer.compile(data) }.value
+            guard let output = try JSONSerialization.jsonObject(with: rendered) as? [String: Any] else {
+                throw ContentError.invalid("Invalid rendered website.")
+            }
+            return output
+        }
         return output
     }
 
