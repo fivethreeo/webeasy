@@ -319,12 +319,11 @@ test("cancelling native full-screen media details leaves content and the picker 
 test("image and video figures can be removed without deleting surrounding content", async ({ page, isMobile }) => {
   await openField(page, '<p>Before</p><figure><img src="assets/coast.svg" alt="Coast"><figcaption>Our coast</figcaption></figure><p>Between</p><figure><video src="media/native-test.mp4"></video><figcaption>Our video</figcaption></figure><p>After</p>');
   const field = page.getByRole("textbox", { name: "Content", exact: true });
-  const remove = page.getByRole("button", { name: "Remove figure", exact: true });
   const activate = (locator) => isMobile ? locator.tap() : locator.click();
-  await expect(remove).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove figure", exact: true })).toHaveCount(0);
   await activate(field.locator("img"));
-  await expect(remove).toBeEnabled();
-  await activate(remove);
+  await expect(field.locator("figure[data-editor-selected]")).toHaveCount(1);
+  await page.keyboard.press("Backspace");
   await expect(field.locator("img")).toHaveCount(0);
   await expect(field.locator("video")).toHaveCount(1);
   await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("assets/coast.svg");
@@ -333,7 +332,11 @@ test("image and video figures can be removed without deleting surrounding conten
   await page.keyboard.type(" caption");
   await expect.poll(() => page.evaluate(() => window.__content)).toContain("<figcaption>Our video caption</figcaption>");
   expect(await page.evaluate(() => window.__content)).not.toContain("data-editor-selected");
-  await activate(remove);
+  const video = field.locator("video");
+  if (isMobile) await video.tap({ position: { x: 8, y: 8 } });
+  else await video.click({ position: { x: 8, y: 8 } });
+  expect(await field.evaluate(() => getSelection().isCollapsed)).toBe(false);
+  await page.keyboard.press("Delete");
   await expect(field.locator("figure")).toHaveCount(0);
   await expect(field.locator("p")).toHaveText(["Before", "Between", "After"]);
   await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<figure");
@@ -344,12 +347,44 @@ test("an uncaptioned figure can be removed and the empty field stays editable", 
   const field = page.getByRole("textbox", { name: "Content", exact: true });
   const activate = (locator) => isMobile ? locator.tap() : locator.click();
   await activate(field.locator("img"));
-  await activate(page.getByRole("button", { name: "Remove figure", exact: true }));
+  await page.keyboard.press("Backspace");
   await expect(field.locator("figure")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Remove figure", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove figure", exact: true })).toHaveCount(0);
   await page.keyboard.type("Still editable");
   await expect(field).toHaveText("Still editable");
   await expect.poll(() => page.evaluate(() => window.__content)).toContain("Still editable");
+});
+
+test("phone deletion input removes only a fully selected figure, not selected caption text", async ({ page, isMobile }) => {
+  await openField(page, '<p>Before</p><figure><img src="assets/coast.svg" alt="Coast"><figcaption>Our coast</figcaption></figure><p>After</p>');
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const caption = field.locator("figcaption");
+  await caption.evaluate((caption) => {
+    const field = caption.closest(".rich-editor");
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(caption);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    field.dispatchEvent(new Event("editor-selection"));
+    const input = new InputEvent("beforeinput", { inputType: "deleteContentBackward", bubbles: true, cancelable: true });
+    field.dispatchEvent(input);
+    window.__captionDeletionPrevented = input.defaultPrevented;
+  });
+  expect(await page.evaluate(() => window.__captionDeletionPrevented)).toBe(false);
+  await expect(field.locator("figure")).toHaveCount(1);
+  if (isMobile) await field.locator("img").tap(); else await field.locator("img").click();
+  await field.locator("img").evaluate((image) => {
+    const range = document.createRange();
+    range.selectNode(image);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    image.closest(".rich-editor").dispatchEvent(new Event("editor-selection"));
+  });
+  await field.evaluate((field) => field.dispatchEvent(new InputEvent("beforeinput", {
+    inputType: "deleteContentBackward", bubbles: true, cancelable: true,
+  })));
+  await expect(field.locator("figure")).toHaveCount(0);
+  await expect(field.locator("p")).toHaveText(["Before", "After"]);
+  await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<figure");
 });
 
 test("page links save and navigate in previews, and the logo returns home without a home menu item", async ({ page }) => {
@@ -424,9 +459,36 @@ test("native fields choose home/subpage links, edit and remove links, reject uns
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(field.locator("a")).toHaveAttribute("href", "https://example.com/info");
   await selectLink();
+  await expect(page.getByRole("button", { name: "Remove link", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Link", exact: true }).click();
   await page.getByRole("button", { name: "Remove link", exact: true }).click();
   await expect(field.locator("a")).toHaveCount(0);
   await expect(field).toHaveText("Selected text");
+  await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<a");
+});
+
+test("Link edits a selected formatted anchor and removes it without losing formatting even with an invalid URL", async ({ page, isMobile }) => {
+  await openField(page, '<p>Before <a href="https://example.com"><strong>our team</strong></a> after</p>');
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const anchor = field.locator("a");
+  if (isMobile) await anchor.tap(); else await anchor.click();
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Edit link", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await anchor.evaluate((anchor) => {
+    anchor.closest(".rich-editor").focus();
+    const range = document.createRange();
+    range.selectNode(anchor);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Edit link", exact: true })).toBeVisible();
+  await page.getByLabel("Link URL").fill("javascript:alert(1)");
+  await page.getByRole("button", { name: "Remove link", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(field.locator("a")).toHaveCount(0);
+  await expect(field.locator("strong")).toHaveText("our team");
+  await expect(field).toHaveText("Before our team after");
   await expect.poll(() => page.evaluate(() => window.__content)).not.toContain("<a");
 });
 
@@ -499,6 +561,16 @@ test("inline marks toggle on the selected word and emphasis works at the caret",
   await bold.click();
   await expect(field.locator("b,strong")).toHaveCount(0);
   const emphasis = page.getByRole("button", { name: "Emphasis", exact: true });
+  for (const name of ["Emphasis", "Strike", "Underline"]) {
+    await expect(page.getByRole("button", { name, exact: true }).locator("svg")).toHaveCount(1);
+  }
+  for (const [name, selector] of [["Strike", "s,strike,del"], ["Underline", "u"]]) {
+    const control = page.getByRole("button", { name, exact: true });
+    await control.click();
+    await expect(field.locator(selector)).toHaveText("beta");
+    await control.click();
+    await expect(field.locator(selector)).toHaveCount(0);
+  }
   await emphasis.click();
   await expect(field.locator("em")).toHaveText("beta");
   await emphasis.click();
@@ -513,6 +585,18 @@ test("inline marks toggle on the selected word and emphasis works at the caret",
   await page.keyboard.type(" typed");
   await expect(field.locator("em")).toContainText("typed");
   await expect(field).toHaveText("alpha beta gamma typed");
+});
+
+test("full rich fields retain list controls while paragraph-only fields omit them", async ({ page }) => {
+  await openField(page, "<p>List item</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  for (const name of ["Bullets", "Numbers"]) {
+    await expect(page.getByRole("button", { name, exact: true }).locator("svg")).toHaveCount(1);
+  }
+  await field.focus();
+  await page.getByRole("button", { name: "Bullets", exact: true }).click();
+  await expect(field.locator("ul li")).toHaveText("List item");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<ul>");
 });
 
 test("SE-sized keyboard viewport keeps media actions reachable after scrolling long content", async ({ page }) => {

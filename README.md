@@ -16,6 +16,7 @@ can be read from saved pictures/screenshots or a camera photo. The Hosting tab
 publishes the generated website directly using FTP, explicit FTPS, or SFTP.
 Dropbox backup is not implemented.
 
+**Settings** contains the Simple/Advanced mode selector and **Templates**.
 The apps default to **Simple** mode and remember the choice on the device.
 Simple hides sections, covers, template loading, and the public URL prefix;
 asides and subpages remain available. Switching modes never deletes hidden
@@ -29,7 +30,7 @@ quotes, images, or videos. It supplies the latest-news summaries; long content
 supplies the full story and supports normal rich text. Existing short-field
 markup is copied into the new long field when migrating, preserving old media.
 The rich-text toolbar bundles Prosango's actual SVG icons for bold, italic,
-lists, links, images, and video, with accessible labels; unmatched controls retain
+emphasis, strike, underline, lists, links, images, and video, with accessible labels; unmatched controls retain
 text labels.
 
 Advanced mode offers optional covers for pages, subpages, and news. Covers
@@ -90,7 +91,7 @@ images, video players, callouts), not a generic layout builder. Every Layout
 primitives are internal CSS implementation details: no stack/grid/cluster
 components, CSS controls, or HTML source panels are exposed in the app showcase.
 
-The **Templates** tab has **Load templates from server**. Publishing creates
+Open **Settings > Templates** for **Load templates from server** in Advanced mode. Publishing creates
 `webeasy_templates/templates/*.html` (including `master.html`) and
 `webeasy_templates/components/*.html` under the configured upload destination.
 Only missing source files are uploaded; existing server edits are preserved.
@@ -243,10 +244,12 @@ homepage is `/home.html`; example logos return there rather than to the catalog.
 
 Content supports headings, paragraphs, bold, italic, strike, underline, emphasis,
 bulleted/numbered lists, blockquotes, and links. **Link** accepts a URL or a
-page/subpage choice; existing links can be edited or removed. Phone images and videos are inserted
+page/subpage choice; use **Link** while on an existing link to edit it or choose
+**Remove link** inside its dialog. Phone images and videos are inserted
 as `<figure>` containing `<img>` or `<video><source>`, with optional `<figcaption>`.
-Text inside a figure is kept in one `<figcaption>`. Select a picture, video, or
-caption and choose **Remove figure** to remove it without deleting the stored media.
+Text inside a figure is kept in one `<figcaption>`. Select a caption to edit it,
+or select the picture/video and use Backspace or Delete to
+remove the whole figure without deleting the stored media.
 The figure dialog provides an optional file basename before opening the phone picker.
 Leave it blank for an automatic name; extensions follow the imported format, and
 duplicate names get numeric suffixes such as `coast-2.jpg`. Basenames accept up to

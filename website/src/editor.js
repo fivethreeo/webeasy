@@ -164,6 +164,7 @@ function linkDetails(project, selectedText, current) {
   insert.type = "submit";
   insert.value = "insert";
   actions.append(insert, button("Cancel", () => dialog.close("cancel")));
+  if (current) actions.append(button("Remove link", () => dialog.close("remove")));
   form.append(pageLabel, urlLabel, textLabel, actions);
   form.addEventListener("submit", (event) => {
     validate();
@@ -174,7 +175,7 @@ function linkDetails(project, selectedText, current) {
   validate();
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => {
-      resolve(dialog.returnValue === "insert" ? {
+      resolve(dialog.returnValue === "remove" ? { remove: true } : dialog.returnValue === "insert" ? {
         href: url.value.trim(), text: !current && selectedText ? selectedText : text.value || url.value.trim(),
       } : null);
       dialog.remove();
@@ -204,22 +205,7 @@ export function richEditor(record, key, labelText, options = {}) {
     activeFigure?.removeAttribute("data-editor-selected");
     activeFigure = figure;
     activeFigure?.setAttribute("data-editor-selected", "");
-    removeFigure.disabled = !activeFigure;
   };
-  const removeFigure = button("Remove figure", () => {
-    if (!activeFigure || !field.contains(activeFigure)) { selectFigure(null); return; }
-    const range = document.createRange();
-    range.setStartBefore(activeFigure); range.collapse(true);
-    const figure = activeFigure;
-    selectFigure(null);
-    figure.remove();
-    restoreSelection(field, range);
-    rememberSelection(field);
-    update(); refreshMarks();
-  });
-  removeFigure.disabled = true;
-  removeFigure.title = "Select a picture, video, or caption, then remove its figure.";
-  removeFigure.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
   const marks = element("div", "cluster formatting-marks");
   const mediaActions = element("div", "cluster media-actions");
   const markControls = [];
@@ -270,16 +256,19 @@ export function richEditor(record, key, labelText, options = {}) {
   }
   block.addEventListener("pointerdown", () => rememberSelection(field));
   block.addEventListener("change", () => format("formatBlock", block.value));
-  for (const [text, short, command, value] of [
+  for (const [text, caption, command, value] of [
     ["Bold", "B", "bold"], ["Italic", "I", "italic"], ["Strike", "S", "strikeThrough"], ["Underline", "U", "underline"],
     ["Emphasis", "Em", "italic"], ["Bullets", "Bullets", "insertUnorderedList"],
     ["Numbers", "Numbers", "insertOrderedList"], ["Quote", "Quote", "formatBlock", "blockquote"],
   ]) {
     if (short && ["insertUnorderedList", "insertOrderedList", "formatBlock"].includes(command)) continue;
-    const control = button(short, () => format(command, value, text === "Emphasis"));
+    const control = button(caption, () => format(command, value, text === "Emphasis"));
     control.setAttribute("aria-label", text);
     control.title = text;
-    editorIcon(control, { Bold: "strong", Italic: "italic", Emphasis: "italic", Bullets: "bulletList", Numbers: "orderedLint" }[text]);
+    editorIcon(control, {
+      Bold: "strong", Italic: "italic", Emphasis: "emphasis", Strike: "strike", Underline: "underline",
+      Bullets: "bulletList", Numbers: "orderedLint",
+    }[text]);
     if (["bold", "italic", "strikeThrough", "underline"].includes(command)) {
       control.setAttribute("aria-pressed", "false");
       markControls.push([control, command]);
@@ -336,9 +325,12 @@ export function richEditor(record, key, labelText, options = {}) {
     control.addEventListener("pointerdown", () => rememberSelection(field));
     mediaActions.append(control);
   }
-  if (!short) mediaActions.append(removeFigure);
   const selectedLink = (range = restoreSelection(field)) => {
     const node = range.commonAncestorContainer;
+    if (range.startContainer === range.endContainer && range.endOffset === range.startOffset + 1) {
+      const child = range.startContainer.childNodes[range.startOffset];
+      if (child?.nodeName === "A") return child;
+    }
     return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
   };
   const link = button("Link", async () => {
@@ -349,7 +341,9 @@ export function richEditor(record, key, labelText, options = {}) {
     const details = await linkDetails(linkProject, selectedText, current);
     if (!details) { restoreSelection(field, linkRange); return; }
     const range = restoreSelection(field, linkRange);
-    if (current && field.contains(current)) {
+    if (details.remove) {
+      if (current && field.contains(current)) current.replaceWith(...current.childNodes);
+    } else if (current && field.contains(current)) {
       current.setAttribute("href", details.href);
       if (current.textContent !== details.text) current.textContent = details.text;
     } else if (!range.collapsed && range.toString() === details.text) {
@@ -361,30 +355,46 @@ export function richEditor(record, key, labelText, options = {}) {
     }
     update(); refreshMarks();
   });
-  const unlink = button("Remove link", () => {
-    const current = selectedLink();
-    if (current && field.contains(current)) { current.replaceWith(...current.childNodes); update(); }
-    else format("unlink");
-  });
   link.setAttribute("aria-label", "Link");
   link.title = "Insert or edit link";
   editorIcon(link, "link");
-  for (const control of [link, unlink]) {
-    control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
-    mediaActions.append(control);
-  }
+  link.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
+  mediaActions.append(link);
   toolbar.append(mediaActions, marks);
+  const removeSelectedFigure = (event) => {
+    const selection = window.getSelection();
+    if (!activeFigure || !field.contains(activeFigure) || !selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    const selected = document.createRange();
+    const fullySelected = [activeFigure, ...activeFigure.querySelectorAll(":scope > img, :scope > video")].some((node) => {
+      selected.selectNode(node);
+      return range.compareBoundaryPoints(Range.START_TO_START, selected) === 0
+        && range.compareBoundaryPoints(Range.END_TO_END, selected) === 0;
+    });
+    if (!fullySelected) return;
+    event.preventDefault();
+    const figure = activeFigure;
+    const caret = document.createRange();
+    caret.setStartBefore(figure); caret.collapse(true);
+    selectFigure(null);
+    figure.remove();
+    restoreSelection(field, caret);
+    rememberSelection(field);
+    update(); refreshMarks();
+  };
   field.addEventListener("focus", () => document.execCommand("defaultParagraphSeparator", false, "p"));
+  field.addEventListener("keydown", (event) => {
+    if (["Backspace", "Delete"].includes(event.key)) removeSelectedFigure(event);
+  });
   field.addEventListener("beforeinput", (event) => {
+    if (["deleteContentBackward", "deleteContentForward"].includes(event.inputType)) removeSelectedFigure(event);
     if (short && ["insertOrderedList", "insertUnorderedList"].includes(event.inputType)) event.preventDefault();
   });
   field.addEventListener("input", () => { if (emphasizeTyping) semanticEmphasis(); update(); refreshMarks(); });
   field.addEventListener("editor-selection", refreshMarks);
   field.addEventListener("keyup", refreshMarks);
-  field.addEventListener("pointerup", () => { emphasizeTyping = false; refreshMarks(); });
   field.addEventListener("blur", () => { record[key] = sanitizeContent(field.innerHTML); });
-  field.addEventListener("click", (event) => {
-    if (event.target.closest("a")) event.preventDefault();
+  const selectMedia = (event) => {
     const figure = event.target.closest("figure");
     if (figure && !event.target.closest("figcaption")) {
       const range = document.createRange();
@@ -392,6 +402,12 @@ export function richEditor(record, key, labelText, options = {}) {
       restoreSelection(field, range);
     }
     refreshMarks();
+  };
+  // Native video controls can consume the subsequent click.
+  field.addEventListener("pointerup", (event) => { emphasizeTyping = false; selectMedia(event); }, { capture: true });
+  field.addEventListener("click", (event) => {
+    if (event.target.closest("a")) event.preventDefault();
+    selectMedia(event);
   });
   field.addEventListener("paste", (event) => {
     event.preventDefault();

@@ -297,7 +297,8 @@ class MainActivity : ComponentActivity() {
                 }
                 Box(Modifier.fillMaxSize()) {
                     Scaffold(topBar = {
-                        TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty) ?: "Webeasy",
+                        TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty)
+                            ?: if (screens.lastOrNull()?.kind == "templates") "Templates" else "Webeasy",
                             maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             navigationIcon = { if (screens.isNotEmpty()) OutlinedButton(onClick = ::back,
                                 contentPadding = PaddingValues(horizontal = 12.dp)) { Text(getString(R.string.back)) } },
@@ -318,6 +319,7 @@ class MainActivity : ComponentActivity() {
                                     RichField(screen.record, screen.contentKey)
                                 }
                                 screen?.kind == "template" -> TemplateSource(screen.record!!)
+                                screen?.kind == "templates" -> Templates()
                                 screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
                                 else -> RootList(revision)
                             }
@@ -363,18 +365,14 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for ((advanced, name) in listOf(false to "Simple", true to "Advanced")) {
-                FilterChip(selected = advancedUI == advanced, enabled = !busy, onClick = {
-                    advancedUI = advanced
-                    getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putBoolean("advanced", advanced).apply()
-                }, label = { Text(name) })
-            }
-        }
         ScrollableTabRow(selectedTabIndex = tab) {
-            listOf("Pages", "News", "Templates", "Changes", "Hosting").forEachIndexed { index, name ->
+            listOf("Pages", "News", "Settings", "Changes", "Hosting").forEachIndexed { index, name ->
                 Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
             }
+        }
+        if (tab == 2) {
+            Settings()
+            return
         }
         if (tab == 4) {
             Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -432,11 +430,45 @@ class MainActivity : ComponentActivity() {
             Changes()
             return
         }
-        val source = if (tab < 2) project else catalog
-        val key = listOf("pages", "news", "templates")[tab]
-        val records = source?.optJSONArray(key)?.records() ?: emptyList()
+        val key = if (tab == 0) "pages" else "news"
+        val records = project?.optJSONArray(key)?.records() ?: emptyList()
         LazyColumn {
-            if (tab == 2 && advancedUI) item {
+            if (tab == 1) item { OutlinedButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
+            items(records.size, key = { records[it].getString("id") }) { index ->
+                RowEntry(records[index], project!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
+            }
+            if (project != null) item {
+                FilledTonalButton(onClick = {
+                    val kind = if (tab == 0) "page" else "news"
+                    val collection = project!!.getJSONArray(key)
+                    val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
+                }) { Text(if (tab == 0) "Add page" else "Add news") }
+            }
+        }
+    }
+
+    @Composable
+    private fun Settings() {
+        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Editor mode", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((advanced, name) in listOf(false to "Simple", true to "Advanced")) {
+                    FilterChip(selected = advancedUI == advanced, enabled = !busy, onClick = {
+                        advancedUI = advanced
+                        getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putBoolean("advanced", advanced).apply()
+                    }, label = { Text(name) })
+                }
+            }
+            Text("Simple hides sections, covers, template loading, and the public URL prefix. Advanced shows all options.")
+            OutlinedButton(onClick = { screens.add(Screen("templates")) }, enabled = ready && !busy) { Text("Templates") }
+        }
+    }
+
+    @Composable
+    private fun Templates() {
+        val records = catalog?.optJSONArray("templates")?.records() ?: emptyList()
+        LazyColumn {
+            if (advancedUI) item {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
                         Text("Load templates from server")
@@ -445,20 +477,11 @@ class MainActivity : ComponentActivity() {
                     if (busy) CircularProgressIndicator()
                 }
             }
-            if (tab == 1) item { OutlinedButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
             items(records.size, key = { records[it].getString("id") }) { index ->
                 val record = records[index]
-                if (tab < 2) RowEntry(record, source!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
-                else ListItem(headlineContent = { Text(record.getString("title")) },
+                ListItem(headlineContent = { Text(record.getString("title")) },
                     supportingContent = { Text(record.getString("description")) },
                     modifier = Modifier.clickable { screens.add(Screen("template", record)) })
-            }
-            if (tab < 2 && source != null) item {
-                FilledTonalButton(onClick = {
-                    val kind = if (tab == 0) "page" else "news"
-                    val collection = source.getJSONArray(key)
-                    val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
-                }) { Text(if (tab == 0) "Add page" else "Add news") }
             }
         }
     }

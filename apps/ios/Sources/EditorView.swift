@@ -433,18 +433,12 @@ struct EditorView: View {
     @StateObject private var model = NativeEditorModel()
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Editor mode", selection: $model.advancedUI) {
-                Text("Simple").tag(false)
-                Text("Advanced").tag(true)
-            }.pickerStyle(.segmented).padding().disabled(model.busy)
-            TabView {
-                contentList(news: false).tabItem { Label("Pages", systemImage: "doc") }
-                contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
-                examples(model.catalog?.templates ?? [], title: "Templates").tabItem { Label("Templates", systemImage: "rectangle") }
-                ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
-                HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
-            }
+        TabView {
+            contentList(news: false).tabItem { Label("Pages", systemImage: "doc") }
+            contentList(news: true).tabItem { Label("News", systemImage: "newspaper") }
+            settings().tabItem { Label("Settings", systemImage: "gearshape") }
+            ChangesView(model: model).tabItem { Label("Changes", systemImage: "list.bullet.rectangle") }
+            HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
         }
         .sheet(item: $model.preview) { item in
             if item.path.isEmpty {
@@ -501,19 +495,37 @@ struct EditorView: View {
         }
     }
 
-    private func examples(_ entries: [CatalogEntry], title: String) -> some View {
+    private func settings() -> some View {
         NavigationStack {
-            List {
-                Text(model.status)
-                if model.advancedUI {
-                    Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
-                    Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+            Form {
+                Section("Editor mode") {
+                    Picker("Editor mode", selection: $model.advancedUI) {
+                        Text("Simple").tag(false)
+                        Text("Advanced").tag(true)
+                    }.pickerStyle(.segmented).disabled(model.busy)
+                    Text("Simple hides sections, covers, template loading, and the public URL prefix. Advanced shows all options.")
                 }
-                if model.busy { ProgressView() }
-                ForEach(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) } }
+                Section {
+                    NavigationLink("Templates") {
+                        examples(model.catalog?.templates ?? [], title: "Templates")
+                    }
+                }
             }
-                .navigationTitle(title)
+            .navigationTitle("Settings")
         }
+    }
+
+    private func examples(_ entries: [CatalogEntry], title: String) -> some View {
+        List {
+            Text(model.status)
+            if model.advancedUI {
+                Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
+                Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
+            }
+            if model.busy { ProgressView() }
+            ForEach(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) } }
+        }
+        .navigationTitle(title)
     }
 }
 
