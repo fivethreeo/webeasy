@@ -207,13 +207,90 @@ export function richEditor(record, key, labelText, options = {}) {
     activeFigure?.setAttribute("data-editor-selected", "");
   };
   const marks = document.createDocumentFragment();
+  const paragraphs = document.createDocumentFragment();
   const mediaActions = document.createDocumentFragment();
   const markControls = [];
   let pendingMark = null;
+  let formatting = false;
+  let typingGroup = null;
+  let lastInput = 0;
+  const editorHTML = () => {
+    const copy = field.cloneNode(true);
+    copy.querySelectorAll("[data-editor-selected]").forEach((figure) => figure.removeAttribute("data-editor-selected"));
+    return copy.innerHTML;
+  };
+  const caret = () => {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !field.contains(selection.anchorNode) || !field.contains(selection.focusNode)) return null;
+    const boundary = (node, offset) => {
+      const path = [];
+      while (node !== field) {
+        path.unshift([...node.parentNode.childNodes].indexOf(node));
+        node = node.parentNode;
+      }
+      return { path, offset };
+    };
+    return [boundary(selection.anchorNode, selection.anchorOffset), boundary(selection.focusNode, selection.focusOffset)];
+  };
+  const history = [{ html: editorHTML(), caret: null }];
+  let historyIndex = 0;
+  const recordHistory = (group) => {
+    field.normalize();
+    const html = editorHTML();
+    if (html !== history[historyIndex].html) {
+      const combine = group && group === typingGroup && Date.now() - lastInput < 1000
+        && historyIndex > 0 && historyIndex === history.length - 1;
+      history.splice(historyIndex + 1);
+      if (combine) history[historyIndex] = { html, caret: caret() };
+      else { history.push({ html, caret: caret() }); historyIndex += 1; }
+    } else history[historyIndex].caret = caret();
+    typingGroup = group;
+    lastInput = Date.now();
+    undo.disabled = historyIndex === 0;
+    redo.disabled = historyIndex === history.length - 1;
+  };
+  const travelHistory = (direction) => {
+    const next = historyIndex + direction;
+    if (next < 0 || next >= history.length) return;
+    historyIndex = next;
+    typingGroup = null;
+    pendingMark = null;
+    emphasizeTyping = false;
+    selectFigure(null);
+    field.innerHTML = history[historyIndex].html;
+    restoreSelection(field, null);
+    const position = history[historyIndex].caret;
+    if (position) {
+      const boundary = ({ path, offset }) => {
+        const node = path.reduce((parent, index) => parent.childNodes[index], field);
+        return [node, Math.min(offset, node.nodeType === 3 ? node.length : node.childNodes.length)];
+      };
+      window.getSelection().setBaseAndExtent(...boundary(position[0]), ...boundary(position[1]));
+    }
+    rememberSelection(field);
+    update();
+    refreshMarks();
+  };
+  const historyControl = (name, direction) => {
+    const control = button(name, () => travelHistory(direction));
+    control.setAttribute("aria-label", name);
+    control.title = name;
+    editorIcon(control, name.toLowerCase());
+    control.disabled = true;
+    control.addEventListener("pointerdown", (event) => event.preventDefault());
+    return control;
+  };
+  const undo = historyControl("Undo", -1);
+  const redo = historyControl("Redo", 1);
   const refreshMarks = () => {
     const selection = window.getSelection();
     if (!selection?.rangeCount || !field.contains(selection.anchorNode)) return;
     rememberSelection(field);
+    if (editorHTML() === history[historyIndex].html) {
+      const position = caret();
+      if (JSON.stringify(position) !== JSON.stringify(history[historyIndex].caret)) typingGroup = null;
+      history[historyIndex].caret = position;
+    }
     const range = selection.getRangeAt(0);
     if (pendingMark && (!range.collapsed
       || range.compareBoundaryPoints(Range.START_TO_START, pendingMark.range) !== 0)) pendingMark = null;
@@ -264,13 +341,20 @@ export function richEditor(record, key, labelText, options = {}) {
     if (replacements.size && anchor && focus) selection.setBaseAndExtent(replacements.get(anchor) ?? anchor, anchorOffset,
       replacements.get(focus) ?? focus, focusOffset);
   };
-  const update = () => { record[key] = sanitizeContent(field.innerHTML); onChange(record[key]); };
+  const update = (group = null) => {
+    record[key] = sanitizeContent(field.innerHTML);
+    onChange(record[key]);
+    recordHistory(group);
+  };
   const format = (command, value, mark) => {
     restoreSelection(field);
-    document.execCommand("styleWithCSS", false, false);
-    document.execCommand(command, false, value);
-    if (command === "italic") emphasizeTyping = mark === "Emphasis" && document.queryCommandState("italic");
-    if (emphasizeTyping) semanticEmphasis();
+    formatting = true;
+    try {
+      document.execCommand("styleWithCSS", false, false);
+      document.execCommand(command, false, value);
+      if (command === "italic") emphasizeTyping = mark === "Emphasis" && document.queryCommandState("italic");
+      if (emphasizeTyping) semanticEmphasis();
+    } finally { formatting = false; }
     const range = window.getSelection().getRangeAt(0);
     pendingMark = range.collapsed && ["italic", "underline"].includes(command)
       ? { name: mark, command, active: document.queryCommandState(command), range: range.cloneRange() } : null;
@@ -301,9 +385,9 @@ export function richEditor(record, key, labelText, options = {}) {
       markControls.push([control, command, { Italic: "i", Emphasis: "em", Underline: "u" }[text], text]);
     }
     control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
-    marks.append(control);
+    (["insertUnorderedList", "insertOrderedList", "formatBlock"].includes(command) ? paragraphs : marks).append(control);
   }
-  if (!short) marks.append(block);
+  if (!short) paragraphs.prepend(block);
   for (const kind of short ? [] : ["image", "video"]) {
     const control = button(kind === "image" ? "Image" : "Video", async () => {
       const mediaRange = restoreSelection(field).cloneRange();
@@ -402,8 +486,8 @@ export function richEditor(record, key, labelText, options = {}) {
   link.title = "Insert or edit link";
   editorIcon(link, "link");
   link.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
-  mediaActions.append(link);
-  toolbar.append(mediaActions, marks);
+  marks.append(link);
+  toolbar.append(undo, redo, marks, paragraphs, mediaActions);
   const removeSelectedFigure = (event) => {
     const selection = window.getSelection();
     if (!activeFigure || !field.contains(activeFigure) || !selection?.rangeCount || selection.isCollapsed) return;
@@ -427,13 +511,31 @@ export function richEditor(record, key, labelText, options = {}) {
   };
   field.addEventListener("focus", () => document.execCommand("defaultParagraphSeparator", false, "p"));
   field.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      travelHistory(event.shiftKey ? 1 : -1);
+    } else if (event.ctrlKey && event.key.toLowerCase() === "y") {
+      event.preventDefault();
+      travelHistory(1);
+    }
     if (["Backspace", "Delete"].includes(event.key)) removeSelectedFigure(event);
   });
   field.addEventListener("beforeinput", (event) => {
+    if (["historyUndo", "historyRedo"].includes(event.inputType)) {
+      event.preventDefault();
+      travelHistory(event.inputType === "historyUndo" ? -1 : 1);
+      return;
+    }
+    if (editorHTML() === history[historyIndex].html) history[historyIndex].caret = caret();
     if (["deleteContentBackward", "deleteContentForward"].includes(event.inputType)) removeSelectedFigure(event);
     if (short && ["insertOrderedList", "insertUnorderedList"].includes(event.inputType)) event.preventDefault();
   });
-  field.addEventListener("input", () => { if (emphasizeTyping) semanticEmphasis(); update(); refreshMarks(); });
+  field.addEventListener("input", (event) => {
+    if (formatting) return;
+    if (emphasizeTyping) semanticEmphasis();
+    update(["insertText", "deleteContentBackward", "deleteContentForward"].includes(event.inputType) ? event.inputType : null);
+    refreshMarks();
+  });
   field.addEventListener("editor-selection", refreshMarks);
   field.addEventListener("keyup", refreshMarks);
   field.addEventListener("blur", () => { record[key] = sanitizeContent(field.innerHTML); });

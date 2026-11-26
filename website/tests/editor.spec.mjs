@@ -653,6 +653,90 @@ test("inline marks toggle on the selected word and emphasis works at the caret",
   await expect(field).toHaveText("alpha beta gamma typed");
 });
 
+test("undo and redo restore semantic formatting and selection and discard obsolete redo", async ({ page }) => {
+  await openField(page, "<p>alpha beta gamma</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const redo = page.getByRole("button", { name: "Redo", exact: true });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeDisabled();
+  await field.evaluate((field) => {
+    field.focus();
+    const text = field.querySelector("p").firstChild;
+    getSelection().setBaseAndExtent(text, 6, text, 10);
+  });
+  await page.getByRole("button", { name: "Emphasis", exact: true }).click();
+  await expect(field.locator("em")).toHaveText("beta");
+  await undo.click();
+  await expect(field.locator("em,i")).toHaveCount(0);
+  expect(await field.evaluate(() => getSelection().toString())).toBe("beta");
+  await redo.click();
+  await expect(field.locator("em")).toHaveText("beta");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(field.locator("em,i")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+Shift+z");
+  await expect(field.locator("em")).toHaveText("beta");
+  await undo.click();
+  await page.keyboard.type("changed");
+  await expect(field).toHaveText("alpha changed gamma");
+  await expect(redo).toBeDisabled();
+  await undo.click();
+  await expect(field).toHaveText("alpha beta gamma");
+  await expect.poll(() => page.evaluate(() => window.__content)).toBe("<p>alpha beta gamma</p>");
+});
+
+test("undo and redo include links, media insertion and selected-figure deletion", async ({ page }) => {
+  await openField(page, "<p>Before</p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const redo = page.getByRole("button", { name: "Redo", exact: true });
+  await field.evaluate((field) => {
+    field.focus();
+    const range = document.createRange();
+    range.selectNodeContents(field.querySelector("p"));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.getByRole("button", { name: "Link", exact: true }).click();
+  await page.getByLabel("Page or subpage").selectOption("/");
+  await page.getByRole("button", { name: "Insert link", exact: true }).click();
+  await expect(field.locator("a")).toHaveAttribute("href", "/");
+  await undo.click();
+  await expect(field.locator("a")).toHaveCount(0);
+  await redo.click();
+  await expect(field.locator("a")).toHaveAttribute("href", "/");
+  await page.getByRole("button", { name: "Phone image", exact: true }).click();
+  await page.getByLabel("Alternative text (images)").fill("Undoable photo");
+  await page.getByRole("button", { name: "Insert figure", exact: true }).click();
+  await expect(field.locator("img")).toHaveAttribute("alt", "Undoable photo");
+  await undo.click();
+  await expect(field.locator("figure")).toHaveCount(0);
+  await redo.click();
+  await expect(field.locator("img")).toHaveAttribute("alt", "Undoable photo");
+  await field.locator("img").click();
+  await page.keyboard.press("Backspace");
+  await expect(field.locator("figure")).toHaveCount(0);
+  await field.evaluate((field) => {
+    const event = new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true });
+    field.dispatchEvent(event);
+    if (!event.defaultPrevented) throw new Error("Editor must handle platform undo.");
+  });
+  await expect(field.locator("img")).toHaveAttribute("alt", "Undoable photo");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain('alt="Undoable photo"');
+});
+
+test("toolbar orders history, inline marks, paragraphs and media in full and short fields", async ({ page }) => {
+  const inline = ["Undo", "Redo", "Bold", "Italic", "Strike", "Underline", "Emphasis", "Link"];
+  for (const paragraphsOnly of [false, true]) {
+    await openField(page, "<p>Toolbar</p>", null, { paragraphsOnly });
+    const toolbar = page.getByRole("group", { name: "Content formatting", exact: true });
+    const order = await toolbar.locator("button,select").evaluateAll((controls) => controls.map((control) => control.getAttribute("aria-label")));
+    expect(order).toEqual(paragraphsOnly ? inline : [...inline, "Paragraph or heading", "Bullets", "Numbers", "Quote", "Phone image", "Phone video"]);
+    for (const name of ["Undo", "Redo"]) {
+      await expect(toolbar.getByRole("button", { name, exact: true }).locator("svg")).toHaveCount(1);
+    }
+  }
+});
+
 test("toolbar highlights markup rather than inherited italic and link styling", async ({ page }) => {
   await openField(page, '<p><i>italic</i> <em>emphasis</em> <a href="about/">link</a> <a href="about/"><u>underlined link</u></a> <i><em>both</em></i> plain</p>');
   const field = page.getByRole("textbox", { name: "Content", exact: true });
