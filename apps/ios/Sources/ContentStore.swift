@@ -95,18 +95,18 @@ final class ContentStore: @unchecked Sendable {
             try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('published_project', ?)",
                         [String(decoding: data, as: UTF8.self)])
         }
+    }
 
-        func templateSources() throws -> Data? {
-            try queue.sync {
-                try (rows("SELECT value FROM metadata WHERE key = 'template_sources'").first?["value"] as? String)?.data(using: .utf8)
-            }
+    func templateSources() throws -> Data? {
+        try queue.sync {
+            try (rows("SELECT value FROM metadata WHERE key = 'template_sources'").first?["value"] as? String)?.data(using: .utf8)
         }
+    }
 
-        func saveTemplateSources(_ data: Data) throws {
-            try queue.sync {
-                try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
-                            [String(decoding: data, as: UTF8.self)])
-            }
+    func saveTemplateSources(_ data: Data) throws {
+        try queue.sync {
+            try execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
+                        [String(decoding: data, as: UTF8.self)])
         }
     }
 
