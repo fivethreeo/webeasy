@@ -514,7 +514,7 @@ struct EditorView: View {
                 }
                 Section {
                     NavigationLink("Templates") {
-                        examples(model.catalog?.templates ?? [], title: "Templates")
+                        examples(title: "Templates")
                     }
                 }
             }
@@ -522,7 +522,7 @@ struct EditorView: View {
         }
     }
 
-    private func examples(_ entries: [CatalogEntry], title: String) -> some View {
+    private func examples(title: String) -> some View {
         List {
             Text(model.status)
             if model.advancedUI {
@@ -530,7 +530,16 @@ struct EditorView: View {
                 Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
             }
             if model.busy { ProgressView() }
-            ForEach(entries) { entry in NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) } }
+            Section("Page templates") {
+                ForEach(model.catalog?.templates ?? []) { entry in
+                    NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) }
+                }
+            }
+            Section("Reusable partials") {
+                ForEach(model.catalog?.components ?? []) { entry in
+                    NavigationLink(entry.title) { TemplateSourceView(entry: entry, model: model) }
+                }
+            }
         }
         .navigationTitle(title)
     }

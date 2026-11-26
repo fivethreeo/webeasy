@@ -485,9 +485,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Templates() {
-        val records = catalog?.optJSONArray("templates")?.records() ?: emptyList()
-        LazyColumn {
-            if (advancedUI) item {
+        TemplateCatalogList(catalog, onSelect = { screens.add(Screen("template", it)) }) {
+            if (advancedUI) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
                         Text("Load templates from server")
@@ -495,12 +494,6 @@ class MainActivity : ComponentActivity() {
                     Text("Publish once to create webeasy_templates on your hosting. Edit its HTML files, then load them here. Existing server templates are never replaced by publishing.")
                     if (busy) CircularProgressIndicator()
                 }
-            }
-            items(records.size, key = { records[it].getString("id") }) { index ->
-                val record = records[index]
-                ListItem(headlineContent = { Text(record.getString("title")) },
-                    supportingContent = { Text(record.getString("description")) },
-                    modifier = Modifier.clickable { screens.add(Screen("template", record)) })
             }
         }
     }

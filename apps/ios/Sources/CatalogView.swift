@@ -6,7 +6,7 @@ struct CatalogView: View {
     var body: some View {
         switch result {
         case .success(let catalog):
-            entries(catalog.templates, title: "Templates")
+            entries(catalog)
         case .failure(let error):
             ContentUnavailableView(
                 "Website resources unavailable",
@@ -16,21 +16,29 @@ struct CatalogView: View {
         }
     }
 
-    private func entries(_ entries: [CatalogEntry], title: String) -> some View {
+    private func entries(_ catalog: Catalog) -> some View {
         NavigationStack {
-            List(entries) { entry in
-                NavigationLink {
-                    TemplateSourceView(entry: entry)
-                } label: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(entry.title).font(.headline)
-                        Text(entry.description).foregroundStyle(.secondary)
-                    }
-
-                    .padding(.vertical, 8)
+            List {
+                Section("Page templates") {
+                    ForEach(catalog.templates) { entry in catalogLink(entry) }
+                }
+                Section("Reusable partials") {
+                    ForEach(catalog.components) { entry in catalogLink(entry) }
                 }
             }
-            .navigationTitle(title)
+            .navigationTitle("Templates")
+        }
+    }
+
+    private func catalogLink(_ entry: CatalogEntry) -> some View {
+        NavigationLink {
+            TemplateSourceView(entry: entry)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(entry.title).font(.headline)
+                Text(entry.description).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
         }
     }
 }

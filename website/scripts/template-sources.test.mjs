@@ -59,3 +59,22 @@ test("only the master renderer accepts generated navigation, and its plain-text 
     "&lt;script&gt;<nav>Menu</nav><p>Body</p>");
   assert.throws(() => render("{{{navigation}}}", {}, "<p>Body</p>"), /Unsupported raw slot/);
 });
+
+test("every reusable partial previews its current source with its example data and master document", () => {
+  const sources = templateSources(catalog);
+  sources["webeasy_templates/components/site-header.html"] =
+    sources["webeasy_templates/components/site-header.html"].replace("<header ", '<header data-partial="loaded" ');
+  const updated = loadTemplateSources(catalog, sources);
+  for (const entry of updated.components) {
+    const html = templatePreview(updated, entry.id);
+    const document = new JSDOM(html).window.document;
+    assert.equal(document.title, entry.title, entry.id);
+    assert.equal(document.querySelector("base").getAttribute("href"), "./", entry.id);
+    assert.ok(!html.includes("{{"), entry.id);
+  }
+  const header = new JSDOM(templatePreview(updated, "site-header")).window.document;
+  assert.ok(header.querySelector('header[data-partial="loaded"]'));
+  assert.ok(header.querySelector("a.site-logo"));
+  assert.ok(new JSDOM(templatePreview(updated, "section-content")).window.document.querySelector("header h2"));
+  assert.throws(() => templatePreview(updated, "missing-partial"), /Template is missing/);
+});

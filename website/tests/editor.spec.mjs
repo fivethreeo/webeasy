@@ -926,6 +926,27 @@ test("native generation engine normalizes content and renders portable website f
   expect(invalid.error).toBeTruthy();
 });
 
+test("native generator previews reusable partials using loaded sources", async ({ page }) => {
+  const catalog = await page.request.get("/catalog.json").then((response) => response.json());
+  await page.goto("/generator.html");
+  const result = await page.evaluate(({ catalog, project }) => {
+    const sources = JSON.parse(window.WebeasyGenerator.templates(JSON.stringify(catalog))).sources;
+    sources["webeasy_templates/components/site-header.html"] =
+      sources["webeasy_templates/components/site-header.html"].replace("<header ", '<header data-partial-preview="loaded" ');
+    const loaded = JSON.parse(window.WebeasyGenerator.loadTemplates(JSON.stringify({ catalog, sources, project })));
+    return ["site-header", "section-content", "site-footer"].map((id) =>
+      JSON.parse(window.WebeasyGenerator.previewTemplate(JSON.stringify({ catalog: loaded.catalog, id }))));
+  }, { catalog, project });
+  for (const preview of result) {
+    expect(preview.error).toBeUndefined();
+    expect(preview.files).toHaveLength(1);
+    expect(preview.files[0].path).toBe("index.html");
+    expect(preview.files[0].html).not.toContain("{{");
+  }
+  expect(result[0].files[0].html).toContain('data-partial-preview="loaded"');
+  expect(result[1].files[0].html).toContain('<h2 id="a-section">A section</h2>');
+});
+
 test("native publishing settings validate independently and compiled links use the public prefix", async ({ page }) => {
   await page.goto("/generator.html");
   const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));

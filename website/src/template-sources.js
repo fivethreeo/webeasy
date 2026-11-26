@@ -51,17 +51,20 @@ export function loadTemplateSources(catalog, sources) {
 }
 
 export function templatePreview(catalog, id) {
-  const entry = catalog.templates.find((item) => item.id === id);
+  const template = catalog.templates.find((item) => item.id === id);
+  const entry = template ?? catalog.components.find((item) => item.id === id);
   if (!entry) throw new Error("Template is missing.");
   const usedIds = new Set();
   const partials = catalogPartials(catalog);
-  const content = entry.example.blocks.map((block) => {
+  const renderComponent = (component) => component.id === "section"
+    ? renderSection(component.source, component.example, component.example.content, usedIds, partials)
+    : renderCatalog(component.source, component.example, partials);
+  const content = template ? entry.example.blocks.map((block) => {
     const component = catalog.components.find((item) => item.id === block);
-    return component.id === "section"
-      ? renderSection(component.source, component.example, component.example.content, usedIds, partials)
-      : renderCatalog(component.source, component.example, partials);
-  }).join("\n");
+    if (!component) throw new Error(`Missing example component: ${block}`);
+    return renderComponent(component);
+  }).join("\n") : renderComponent(entry);
   const master = catalog.templates.find((item) => item.id === "master");
-  const body = id === "master" ? content : render(entry.source, entry.example, content, partials);
+  const body = !template || id === "master" ? content : render(entry.source, entry.example, content, partials);
   return renderMaster(master.source, { title: entry.title, baseHref: "./" }, body, "<nav>Example menu</nav>", partials);
 }

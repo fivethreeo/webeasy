@@ -110,6 +110,11 @@ next publish use them. This loads existing registered templates, not new catalog
 entries. Each file is limited to 256 KiB. Loading templates does not save or
 replace your page/news content.
 
+The Templates screen lists **Page templates** and **Reusable partials** in both
+editor modes. Every catalog entry can be opened to read/select its current source
+and preview its example, including loaded server overrides. Loading server
+templates remains an Advanced-mode action.
+
 The engine is Mustach 1.2.10 (0BSD) with cJSON 1.7.19 (MIT), vendored under
 `shared/renderer/vendor/` with their original notices. Builds also package
 `renderer-licenses.txt` into both apps. The same C implementation runs through
