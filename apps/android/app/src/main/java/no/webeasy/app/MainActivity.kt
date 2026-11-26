@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -227,6 +228,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         advancedUI = getSharedPreferences("editor-ui", MODE_PRIVATE).getBoolean("advanced", false)
+        tab = savedInstanceState?.getInt("selectedTab", 0)?.takeIf { it in 0..4 } ?: 0
         savedInstanceState?.getString("hostingQRPhoto")?.takeIf {
             it.startsWith("hosting-qr-") && it.endsWith(".jpg") && File(it).name == it
         }?.let { pendingQRPhoto = File(File(cacheDir, "exports"), it) }
@@ -295,8 +297,12 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(onClick = { pendingBack = null }) { Text("Cancel") }
                         } })
                 }
+                val primaryNavigation = screens.isEmpty()
+                val tablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
                 Box(Modifier.fillMaxSize()) {
-                    Scaffold(topBar = {
+                    Scaffold(bottomBar = {
+                        if (primaryNavigation && !tablet) PrimaryNavigation(rail = false, selectedTab = tab, onSelect = { tab = it })
+                    }, topBar = {
                         TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty)
                             ?: if (screens.lastOrNull()?.kind == "templates") "Templates" else "Webeasy",
                             maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -310,18 +316,21 @@ class MainActivity : ComponentActivity() {
                                     contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Export") }
                             })
                     }) { padding ->
-                        Column(Modifier.fillMaxSize().padding(padding)) {
-                            val screen = screens.lastOrNull()
-                            if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
-                            when {
-                                screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
-                                screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
-                                    RichField(screen.record, screen.contentKey)
+                        Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                            if (primaryNavigation && tablet) PrimaryNavigation(rail = true, selectedTab = tab, onSelect = { tab = it })
+                            Column(Modifier.weight(1f).fillMaxHeight()) {
+                                val screen = screens.lastOrNull()
+                                if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
+                                when {
+                                    screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
+                                    screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
+                                        RichField(screen.record, screen.contentKey)
+                                    }
+                                    screen?.kind == "template" -> TemplateSource(screen.record!!)
+                                    screen?.kind == "templates" -> Templates()
+                                    screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
+                                    else -> RootList(revision)
                                 }
-                                screen?.kind == "template" -> TemplateSource(screen.record!!)
-                                screen?.kind == "templates" -> Templates()
-                                screen?.record != null -> key(screen.record.getString("id")) { RecordForm(screen, revision) }
-                                else -> RootList(revision)
                             }
                         }
                     }
@@ -333,6 +342,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         pendingQRPhoto?.let { outState.putString("hostingQRPhoto", it.name) }
+        outState.putInt("selectedTab", tab)
         super.onSaveInstanceState(outState)
     }
 
@@ -365,11 +375,6 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun RootList(@Suppress("UNUSED_PARAMETER") revision: Int) {
-        ScrollableTabRow(selectedTabIndex = tab) {
-            listOf("Pages", "News", "Settings", "Changes", "Hosting").forEachIndexed { index, name ->
-                Tab(selected = tab == index, onClick = { tab = index }, text = { Text(name) })
-            }
-        }
         if (tab == 2) {
             Settings()
             return

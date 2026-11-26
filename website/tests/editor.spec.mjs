@@ -573,6 +573,8 @@ test("inline marks toggle on the selected word and emphasis works at the caret",
   }
   await emphasis.click();
   await expect(field.locator("em")).toHaveText("beta");
+  await expect(emphasis).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Italic", exact: true })).toHaveAttribute("aria-pressed", "false");
   await emphasis.click();
   await expect(field.locator("em,i")).toHaveCount(0);
   await expect(field).toHaveText("alpha beta gamma");
@@ -582,9 +584,44 @@ test("inline marks toggle on the selected word and emphasis works at the caret",
     getSelection().setBaseAndExtent(text, text.length, text, text.length);
   });
   await emphasis.click();
+  await expect(emphasis).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Italic", exact: true })).toHaveAttribute("aria-pressed", "false");
   await page.keyboard.type(" typed");
   await expect(field.locator("em")).toContainText("typed");
   await expect(field).toHaveText("alpha beta gamma typed");
+});
+
+test("toolbar highlights markup rather than inherited italic and link styling", async ({ page }) => {
+  await openField(page, '<p><i>italic</i> <em>emphasis</em> <a href="about/">link</a> <a href="about/"><u>underlined link</u></a> <i><em>both</em></i> plain</p>');
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  const names = ["Italic", "Emphasis", "Link", "Underline"];
+  for (const [selector, active] of [
+    ["i:first-child", ["Italic"]],
+    ["p > em", ["Emphasis"]],
+    ["a:first-of-type", ["Link"]],
+    ["u", ["Link", "Underline"]],
+    ["i > em", ["Italic", "Emphasis"]],
+    ["p", []],
+  ]) {
+    for (const caret of [false, true]) {
+      await field.evaluate((field, { selector, caret }) => {
+        field.focus();
+        const node = field.querySelector(selector);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        if (caret) {
+          if (selector === "p") range.collapse(false);
+          else range.setStart(node.firstChild, 1);
+          range.collapse(true);
+        }
+        getSelection().removeAllRanges(); getSelection().addRange(range);
+        field.dispatchEvent(new Event("editor-selection"));
+      }, { selector, caret });
+      for (const name of names) {
+        await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", String(active.includes(name)));
+      }
+    }
+  }
 });
 
 test("full rich fields retain list controls while paragraph-only fields omit them", async ({ page }) => {

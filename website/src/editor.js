@@ -209,11 +209,31 @@ export function richEditor(record, key, labelText, options = {}) {
   const marks = document.createDocumentFragment();
   const mediaActions = document.createDocumentFragment();
   const markControls = [];
+  let pendingMark = null;
   const refreshMarks = () => {
     const selection = window.getSelection();
     if (!selection?.rangeCount || !field.contains(selection.anchorNode)) return;
     rememberSelection(field);
     const range = selection.getRangeAt(0);
+    if (pendingMark && (!range.collapsed
+      || range.compareBoundaryPoints(Range.START_TO_START, pendingMark.range) !== 0)) pendingMark = null;
+    const selectedText = [];
+    if (!range.collapsed) {
+      const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode;
+        if (text.length && range.intersectsNode(text)
+          && !(range.startContainer === text && range.startOffset === text.length)
+          && !(range.endContainer === text && range.endOffset === 0)) selectedText.push(text);
+      }
+    }
+    const hasMark = (selector) => {
+      if (range.collapsed) {
+        const node = range.startContainer;
+        return Boolean((node.nodeType === 1 ? node : node.parentElement)?.closest(selector));
+      }
+      return selectedText.length > 0 && selectedText.every((text) => text.parentElement.closest(selector));
+    };
     const node = range.commonAncestorContainer;
     let figure = (node.nodeType === 1 ? node : node.parentElement)?.closest("figure");
     if (!figure && range.startContainer === range.endContainer && range.endOffset === range.startOffset + 1) {
@@ -221,9 +241,13 @@ export function richEditor(record, key, labelText, options = {}) {
       if (child?.nodeName === "FIGURE") figure = child;
     }
     selectFigure(figure && field.contains(figure) ? figure : null);
-    for (const [control, command] of markControls) {
-      control.setAttribute("aria-pressed", String(document.queryCommandState(command)));
+    for (const [control, command, selector, name] of markControls) {
+      const active = selector ? pendingMark?.command === command
+        ? pendingMark.name === name && pendingMark.active : hasMark(selector)
+        : document.queryCommandState(command);
+      control.setAttribute("aria-pressed", String(active));
     }
+    link.setAttribute("aria-pressed", String(hasMark("a")));
   };
   let emphasizeTyping = false;
   const semanticEmphasis = () => {
@@ -241,12 +265,15 @@ export function richEditor(record, key, labelText, options = {}) {
       replacements.get(focus) ?? focus, focusOffset);
   };
   const update = () => { record[key] = sanitizeContent(field.innerHTML); onChange(record[key]); };
-  const format = (command, value, emphasis = false) => {
+  const format = (command, value, mark) => {
     restoreSelection(field);
     document.execCommand("styleWithCSS", false, false);
     document.execCommand(command, false, value);
-    if (command === "italic") emphasizeTyping = emphasis && document.queryCommandState("italic");
+    if (command === "italic") emphasizeTyping = mark === "Emphasis" && document.queryCommandState("italic");
     if (emphasizeTyping) semanticEmphasis();
+    const range = window.getSelection().getRangeAt(0);
+    pendingMark = range.collapsed && ["italic", "underline"].includes(command)
+      ? { name: mark, command, active: document.queryCommandState(command), range: range.cloneRange() } : null;
     update(); refreshMarks();
   };
   const block = document.createElement("select");
@@ -262,7 +289,7 @@ export function richEditor(record, key, labelText, options = {}) {
     ["Numbers", "Numbers", "insertOrderedList"], ["Quote", "Quote", "formatBlock", "blockquote"],
   ]) {
     if (short && ["insertUnorderedList", "insertOrderedList", "formatBlock"].includes(command)) continue;
-    const control = button(caption, () => format(command, value, text === "Emphasis"));
+    const control = button(caption, () => format(command, value, text));
     control.setAttribute("aria-label", text);
     control.title = text;
     editorIcon(control, {
@@ -271,7 +298,7 @@ export function richEditor(record, key, labelText, options = {}) {
     }[text]);
     if (["bold", "italic", "strikeThrough", "underline"].includes(command)) {
       control.setAttribute("aria-pressed", "false");
-      markControls.push([control, command]);
+      markControls.push([control, command, { Italic: "i", Emphasis: "em", Underline: "u" }[text], text]);
     }
     control.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
     marks.append(control);
@@ -356,6 +383,7 @@ export function richEditor(record, key, labelText, options = {}) {
     update(); refreshMarks();
   });
   link.setAttribute("aria-label", "Link");
+  link.setAttribute("aria-pressed", "false");
   link.title = "Insert or edit link";
   editorIcon(link, "link");
   link.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });

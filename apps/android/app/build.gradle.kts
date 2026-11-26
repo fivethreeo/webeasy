@@ -18,8 +18,8 @@ android {
         applicationId = "no.webeasy.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 17
+        versionName = "0.1.17"
     }
 
     compileOptions {
@@ -74,7 +74,9 @@ dependencies {
     implementation("commons-net:commons-net:3.12.0")
     implementation("com.hierynomus:sshj:0.40.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("org.apache.ftpserver:ftpserver-core:1.2.0")

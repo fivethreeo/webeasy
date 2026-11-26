@@ -17,6 +17,10 @@ publishes the generated website directly using FTP, explicit FTPS, or SFTP.
 Dropbox backup is not implemented.
 
 **Settings** contains the Simple/Advanced mode selector and **Templates**.
+Android uses a native bottom navigation bar on phones and a left navigation rail
+on tablets (smallest window width at least 600dp), with matching outline symbols
+for Pages, News, Settings, Changes, and Hosting. Navigation stays out of pushed
+editing screens; normal Back navigation and unsaved-change prompts are preserved.
 The apps default to **Simple** mode and remember the choice on the device.
 Simple hides sections, covers, template loading, and the public URL prefix;
 asides and subpages remain available. Switching modes never deletes hidden
