@@ -180,7 +180,9 @@ export function prepareSite(project, catalog, options = {}) {
     slug: page.slug, date: page.date, href: routes.get(page.id) });
   const asideData = (asides = []) => asides.map((aside) => {
     const html = rich(aside.content, homeHref);
-    return { ...aside, html, content: composed("rich-content", { html }) };
+    return { ...aside, html, content: composed("aside-content", {
+      heading: aside.heading ?? "", content: composed("rich-content", { html }),
+    }) };
   });
   const recordData = (record) => {
     const usedIds = new Set();
@@ -188,8 +190,11 @@ export function prepareSite(project, catalog, options = {}) {
       const html = rich(section.content, homeHref);
       const asides = asideData(section.asides);
       const values = { html, asides, hasAsides: asides.length > 0, content: composed("rich-content", { html }) };
-      return { ...section, ...values, headingId: uniqueHeadingId(section.heading, usedIds),
-        subheading: (section.subheading ?? "").trim(), content: composed("with-asides", values) };
+      const fields = { ...section, ...values, headingId: uniqueHeadingId(section.heading, usedIds),
+        subheading: (section.subheading ?? "").trim() };
+      return { ...fields, content: composed("section-content", {
+        ...fields, content: composed("with-asides", values),
+      }) };
     });
     const image = coverMedia(record, project.media);
     const html = rich(record.content ?? record.shortContent, homeHref);

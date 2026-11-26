@@ -134,7 +134,7 @@ states, `title`, and `baseHref`.
 
 The `site-header`, `navigation-item`, `breadcrumbs`, `subpage-navigation`,
 `subpage-item`, `page-content`, `body`, `main-content`, `with-asides`, `section`,
-`aside`, `cover-image`, `rich-content`, `news-list`, `news-summary`, `news-empty`,
+`section-content`, `aside`, `aside-content`, `cover-image`, `rich-content`, `news-list`, `news-summary`, `news-empty`,
 and `site-footer` partials own the published markup. Existing `{{{content}}}`
 and `{{{navigation}}}` layouts continue working; new layouts can instead loop
 over structured data and compose partials directly. A content slot is no longer

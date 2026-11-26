@@ -105,3 +105,16 @@ test("templates control navigation, footer, headings, sidebars, covers and news 
   const allNews = new JSDOM(changed.find((file) => file.path === "news/index.html").html).window.document;
   assert.equal(allNews.querySelectorAll("article").length, project.news.length);
 });
+
+test("legacy section and aside source overrides retain their generated headings", async () => {
+  const catalog = await loadCatalog(path.join(root, "website/src"));
+  const project = await loadProject(path.join(root, "website/src"));
+  const sources = templateSources(catalog);
+  sources["webeasy_templates/components/section.html"] =
+    '<section data-legacy-section aria-labelledby="{{headingId}}">{{{content}}}</section>';
+  sources["webeasy_templates/components/aside.html"] = '<aside data-legacy-aside>{{{content}}}</aside>';
+  const updated = loadTemplateSources(catalog, sources);
+  const page = new JSDOM(renderSite(project, updated).find((file) => file.path === "about/index.html").html).window.document;
+  assert.equal(page.querySelector("[data-legacy-section] > header > h2").textContent, project.pages[0].sections[0].heading);
+  assert.ok(page.querySelector("[data-legacy-aside] > h3"));
+});

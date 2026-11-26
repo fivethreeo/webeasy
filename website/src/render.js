@@ -41,5 +41,7 @@ export function renderSection(source, values, content, usedIds = new Set(), part
   const subheading = values.subheading ?? "";
   if (typeof subheading !== "string") throw new Error("Missing string field: subheading");
   const headingId = uniqueHeadingId(values.heading, usedIds);
-  return render(source, { ...values, subheading: subheading.trim(), headingId }, content, partials);
+  const fields = { ...values, subheading: subheading.trim(), headingId };
+  const body = render(partials["section-content"], fields, content, partials);
+  return render(source, fields, body, partials);
 }

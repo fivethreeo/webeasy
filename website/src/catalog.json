@@ -86,7 +86,7 @@
       "title": "Aside",
       "description": "An optional aside belonging to a page, news item, or section.",
       "file": "components/aside.html",
-      "example": { "heading": "A related note", "content": "<p>An aside belongs to its parent.</p>" }
+      "example": { "heading": "A related note", "content": "<h3>A related note</h3><p>An aside belongs to its parent.</p>" }
     },
     {
       "id": "text",
@@ -162,6 +162,16 @@
       {
         "id": "site-footer", "title": "Site footer", "description": "An optional footer shared by every page.",
         "file": "components/site-footer.html", "example": {}
+      },
+      {
+        "id": "section-content", "title": "Section heading and body", "description": "Generated section heading, optional introduction and body.",
+        "file": "components/section-content.html",
+        "example": { "heading": "A section", "headingId": "a-section", "subheading": "An introduction", "content": "<p>Section content.</p>" }
+      },
+      {
+        "id": "aside-content", "title": "Aside heading and body", "description": "An optional aside heading and its content.",
+        "file": "components/aside-content.html",
+        "example": { "heading": "A note", "content": "<p>Related content.</p>" }
     },
     {
       "id": "image",
