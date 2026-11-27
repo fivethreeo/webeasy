@@ -30,14 +30,23 @@ targets:
       - path: ../../shared/renderer/vendor/cjson/cJSON.c
       - path: ../../shared/renderer/vendor/utf8proc/utf8proc.c
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/core
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/dom
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/html
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/ns
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/tag
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/url
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/unicode
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/encoding
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/punycode
+        excludes: [config.cmake]
       - path: ../../shared/renderer/vendor/lexbor/source/lexbor/ports/posix/lexbor/core/memory.c
       - path: Resources/Website
         type: folder
