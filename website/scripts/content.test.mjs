@@ -91,7 +91,7 @@ test("rich text keeps supported formatting and local figures, but removes execut
   const document = dom(html);
   assert.equal(document.querySelector("h1"), null);
   assert.equal(document.querySelector("h2").textContent, "Heading");
-  for (const tag of ["b", "strong", "i", "em", "u", "s", "del", "ul", "ol", "blockquote"]) assert.ok(document.querySelector(tag));
+  for (const tag of ["strong", "i", "em", "u", "s", "del", "ul", "ol", "blockquote"]) assert.ok(document.querySelector(tag));
   assert.equal(document.querySelector("img").parentElement.tagName, "FIGURE");
   assert.equal(document.querySelector("img").getAttribute("src"), "media/photo.jpg");
   assert.equal(document.querySelector("source").getAttribute("src"), "media/clip.mp4");
@@ -101,6 +101,30 @@ test("rich text keeps supported formatting and local figures, but removes execut
   assert.equal(document.querySelector("video").hasAttribute("autoplay"), false);
   assert.equal(document.querySelector("video").hasAttribute("src"), false);
   assert.equal(document.querySelector("[onerror],[style],script,iframe,svg"), null);
+  assert.equal(sanitizeRichText(html), html);
+});
+
+test("legacy bold markup becomes semantic strong without losing links or text", () => {
+  const input = '<p><b>Bold <a href="about/">link</a></b> and <strong>strong</strong>.</p>';
+  const expected = '<p><strong>Bold <a href="about/">link</a></strong> and <strong>strong</strong>.</p>';
+  for (const sanitize of [sanitizeRichText, sanitizeShortText]) {
+    assert.equal(sanitize(input), expected);
+    assert.equal(sanitize(expected), expected);
+  }
+});
+
+test("rich text wraps loose inline runs in paragraphs without changing surrounding blocks or captions", () => {
+  assert.equal(sanitizeRichText("It&nbsp;<strong>works</strong>!<p></p>"),
+    "<p>It&nbsp;<strong>works</strong>!</p><p></p>");
+  const html = sanitizeRichText('<h2>Heading</h2>\nFirst <strong>bold</strong>!<p>Existing</p>' +
+    'Next <a href="about/">link</a><figure><img src="media/photo.jpg"><figcaption>Caption</figcaption></figure>Last<br>line');
+  const document = dom(html);
+  assert.deepEqual([...document.body.children].map((node) => node.tagName), ["H2", "P", "P", "P", "FIGURE", "P"]);
+  assert.deepEqual([...document.querySelectorAll("body > p")].map((node) => node.textContent),
+    ["\nFirst bold!", "Existing", "Next link", "Lastline"]);
+  assert.equal(document.querySelector("p a").getAttribute("href"), "about/");
+  assert.equal(document.querySelector("figcaption").innerHTML, "Caption");
+  assert.equal(document.querySelector("body > p:last-child").innerHTML, "Last<br>line");
   assert.equal(sanitizeRichText(html), html);
 });
 

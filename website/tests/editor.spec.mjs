@@ -279,6 +279,94 @@ test("native embed exposes only a rich-text field, reports edits/height, and for
   await expect(field.locator("figure video source")).toHaveAttribute("src", "media/native-test.mp4");
 });
 
+test("rich editor keeps inline formatting on one line and the trailing paragraph editable", async ({ page }) => {
+  await openField(page, "It&nbsp;<b>works</b>!<p></p>");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await expect(field.locator("strong")).toHaveText("works");
+  await expect(field.locator("b")).toHaveCount(0);
+  await expect(field.locator(":scope > p")).toHaveCount(2);
+  const paragraph = field.locator(":scope > p").last();
+  const tops = await field.evaluate((element) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const result = [];
+    while (walker.nextNode()) {
+      if (!walker.currentNode.textContent.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(walker.currentNode);
+      result.push(range.getBoundingClientRect().top);
+    }
+    return result;
+  });
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(2);
+  await field.evaluate((element) => {
+    element.focus();
+    const range = document.createRange();
+    range.selectNodeContents(element.querySelector("p:last-child"));
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  await page.keyboard.type("Next paragraph");
+  await expect(paragraph).toHaveText("Next paragraph");
+  await paragraph.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = window.getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  await expect(paragraph.locator("strong")).toHaveText("Next paragraph");
+  await expect.poll(() => page.evaluate(() => window.__content)).toContain("<strong>Next paragraph</strong>");
+  await expect(field.locator("b")).toHaveCount(0);
+  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  await expect(paragraph.locator("strong")).toHaveCount(0);
+  await paragraph.evaluate((paragraph) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  });
+  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  await page.keyboard.type(" bold");
+  await expect(paragraph.locator("strong")).toContainText("bold");
+  await expect(field.locator("b")).toHaveCount(0);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(paragraph.locator("strong")).toHaveCount(0);
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(paragraph.locator("strong")).toContainText("bold");
+  await expect(field.locator("b")).toHaveCount(0);
+});
+
+test("empty rich editors keep typing inside paragraphs after Enter and clearing", async ({ page }) => {
+  await openField(page, "");
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await expect(field.locator(":scope > p")).toHaveCount(1);
+  await field.click();
+  await page.keyboard.type("First");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Second");
+  await expect(field.locator(":scope > p")).toHaveText(["First", "Second"]);
+  await expect.poll(() => page.evaluate(() => window.__content)).toBe("<p>First</p><p>Second</p>");
+  await field.fill("");
+  await page.keyboard.type("Restarted");
+  await expect(field.locator(":scope > p")).toHaveText(["Restarted"]);
+  await expect.poll(() => page.evaluate(() => window.__content)).toBe("<p>Restarted</p>");
+});
+
+test("live paragraph normalization preserves a root-boundary caret in loose inline content", async ({ page }) => {
+  await openField(page);
+  const field = page.getByRole("textbox", { name: "Content", exact: true });
+  await field.evaluate((element) => {
+    element.innerHTML = "Before <strong>word</strong> after";
+    element.focus();
+    window.getSelection().setBaseAndExtent(element, 2, element, 2);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  });
+  await page.keyboard.type("X");
+  await expect(field.locator(":scope > p")).toHaveText(["Before wordX after"]);
+});
+
 test("optional basenames are validated before the picker and native filenames are used in figures", async ({ page }) => {
   await openField(page);
   const field = page.getByRole("textbox", { name: "Content", exact: true });
@@ -926,6 +1014,61 @@ test("native generation engine normalizes content and renders portable website f
     version: 1, pages: [{ id: "invalid", title: "Bad slug", slug: "../escape", date: "2026-01-01" }], news: [], media: [],
   }))));
   expect(invalid.error).toBeTruthy();
+});
+
+test("published rich content keeps inline formatting on one line and spaces paragraphs and media", async ({ page }) => {
+  await page.goto("/generator.html");
+  const catalog = await page.request.get("/catalog.json").then((response) => response.json());
+  const content = [
+    "It&nbsp;<strong>works</strong>!<p></p>",
+    '<p>First paragraph.</p><p>Second <em>paragraph</em>.</p>' +
+      '<figure class="stack"><img src="media/native-test.png" alt="Test image"><figcaption>Image caption</figcaption></figure>' +
+      '<figure class="stack"><video src="media/native-test.mp4" controls></video><figcaption>Video caption</figcaption></figure>' +
+      "<p>Last paragraph.</p>",
+  ];
+  const documents = await page.evaluate(({ project, catalog, content, photoSize, videoSize }) => content.map((html) => {
+    const sample = {
+      ...project, homePageId: "inline-layout", news: [],
+      pages: [{ ...project.pages[0], id: "inline-layout", title: "Inline layout", menuTitle: "Inline layout",
+        slug: "inline-layout", templateId: "page", coverMediaId: "", coverAlt: "",
+        content: html, children: [], sections: [], asides: [] }],
+      media: [
+        { id: "inline-image", filename: "native-test.png", mimeType: "image/png", originalName: "Test image.png", size: photoSize },
+        { id: "inline-video", filename: "native-test.mp4", mimeType: "video/mp4", originalName: "Test video.mp4", size: videoSize },
+      ],
+    };
+    return JSON.parse(window.WebeasyGenerator.compile(JSON.stringify({ project: sample, catalog })));
+  }), { project, catalog, content, photoSize: photo.length, videoSize: clip.length });
+  for (const document of documents) expect(document.error).toBeUndefined();
+  for (let index = 0; index < documents.length; index++) {
+    const html = documents[index].files.find((file) => file.path === "index.html").html;
+    await page.route(`**/inline-layout-${index}.html`, (route) => route.fulfill({ contentType: "text/html", body: html }));
+  }
+  await page.route("**/media/native-test.png", (route) => route.fulfill({ contentType: "image/png", body: photo }));
+  await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
+  await page.goto("/inline-layout-0.html");
+  const rich = page.locator("main .rich-content").first();
+  await expect(rich.locator(":scope > p")).toHaveCount(2);
+  const layout = await rich.evaluate((element) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const tops = [];
+    while (walker.nextNode()) {
+      if (!walker.currentNode.textContent.trim()) continue;
+      const range = document.createRange();
+      range.selectNodeContents(walker.currentNode);
+      tops.push(range.getBoundingClientRect().top);
+    }
+    return { tops, height: element.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(element).lineHeight) };
+  });
+  expect(Math.max(...layout.tops) - Math.min(...layout.tops)).toBeLessThan(2);
+  expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
+  await page.goto("/inline-layout-1.html");
+  const blocks = await rich.locator(":scope > :is(p, figure)").evaluateAll((elements) =>
+    elements.map((element) => ({ top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom })));
+  expect(blocks).toHaveLength(5);
+  for (let index = 1; index < blocks.length; index++) expect(blocks[index].top).toBeGreaterThan(blocks[index - 1].bottom);
+  await expect(rich.locator("figure img")).toBeVisible();
+  await expect(rich.locator("figure video")).toBeVisible();
 });
 
 test("native generator previews reusable partials using loaded sources", async ({ page }) => {

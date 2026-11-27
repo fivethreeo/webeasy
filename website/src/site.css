@@ -43,6 +43,10 @@ body {
   overflow-wrap: anywhere;
 }
 
+.rich-content > p:empty:last-child {
+  display: none;
+}
+
 .with-sidebar {
   --sidebar-width: 16rem;
 }

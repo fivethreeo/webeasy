@@ -11,6 +11,25 @@ const attributes = {
   video: ["src", "poster", "controls", "playsinline", "preload", "width", "height"],
   source: ["src", "type"],
 };
+const inlineTags = new Set(["BR", "B", "STRONG", "I", "EM", "S", "STRIKE", "DEL", "U", "A"]);
+const blockSelector = "p,div,h1,h2,h3,h4,h5,h6,ul,ol,li,blockquote,figure,figcaption";
+
+export function wrapInlineParagraphs(container) {
+  let paragraph = null;
+  let changed = false;
+  for (const node of [...container.childNodes]) {
+    if (node.nodeType === 3 || (node.nodeType === 1 && inlineTags.has(node.tagName) && !node.querySelector(blockSelector))) {
+      if (!paragraph) {
+        if (node.nodeType === 3 && !node.textContent.trim()) continue;
+        paragraph = container.ownerDocument.createElement("p");
+        container.insertBefore(paragraph, node);
+        changed = true;
+      }
+      paragraph.append(node);
+    } else paragraph = null;
+  }
+  return changed;
+}
 
 export function safeLinkHref(value) {
   if (!value || /[\u0000-\u0020\u007f\\]/.test(value)) return false;
@@ -56,6 +75,11 @@ export function createRichTextSanitizer(window, paragraphsOnly = false) {
       const replacement = window.document.createElement("h2");
       replacement.append(...heading.childNodes);
       heading.replaceWith(replacement);
+    }
+    for (const bold of fragment.querySelectorAll("b")) {
+      const strong = window.document.createElement("strong");
+      strong.append(...bold.childNodes);
+      bold.replaceWith(strong);
     }
     for (const media of fragment.querySelectorAll("img,video")) {
       if (media.tagName === "IMG" && !media.hasAttribute("src")) {
@@ -106,11 +130,10 @@ export function createRichTextSanitizer(window, paragraphsOnly = false) {
         if (paragraph.textContent.trim() || paragraph.querySelector("br")) output.append(paragraph);
         paragraph = window.document.createElement("p");
       };
-      const inline = new Set(["BR", "B", "STRONG", "I", "EM", "S", "STRIKE", "DEL", "U", "A"]);
       const visit = (node) => {
         if (node.nodeType === 3) { paragraph.append(node.cloneNode(true)); return; }
         if (node.nodeType !== 1 || node.matches("img,video,source")) return;
-        if (inline.has(node.tagName) && !node.querySelector("p,div,h1,h2,h3,h4,h5,h6,ul,ol,li,blockquote,figure")) {
+        if (inlineTags.has(node.tagName) && !node.querySelector(blockSelector)) {
           const copy = node.cloneNode(true);
           copy.querySelectorAll("img,video,source").forEach((media) => media.remove());
           paragraph.append(copy);
@@ -124,6 +147,7 @@ export function createRichTextSanitizer(window, paragraphsOnly = false) {
       flush();
       return output.innerHTML;
     }
+    wrapInlineParagraphs(container);
     return container.innerHTML;
   };
 }

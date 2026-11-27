@@ -1,5 +1,5 @@
 import "./editor.css";
-import { createRichTextSanitizer, safeLinkHref } from "./rich-text.js";
+import { createRichTextSanitizer, safeLinkHref, wrapInlineParagraphs } from "./rich-text.js";
 import { newId, normalizeProject, pageRoutes, sortedNews, renderSite, referencedMedia } from "./content-model.js";
 import { editorIcon } from "./editor-icons.js";
 
@@ -199,7 +199,7 @@ export function richEditor(record, key, labelText, options = {}) {
   field.setAttribute("role", "textbox");
   field.setAttribute("aria-multiline", "true");
   field.setAttribute("aria-labelledby", label.id);
-  field.innerHTML = sanitizeContent(record[key]);
+  field.innerHTML = sanitizeContent(record[key]) || "<p></p>";
   let activeFigure = null;
   const selectFigure = (figure) => {
     activeFigure?.removeAttribute("data-editor-selected");
@@ -327,21 +327,43 @@ export function richEditor(record, key, labelText, options = {}) {
     link.setAttribute("aria-pressed", String(hasMark("a")));
   };
   let emphasizeTyping = false;
-  const semanticEmphasis = () => {
+  const semanticMark = (source, tag) => {
     const selection = window.getSelection();
     const anchor = selection.anchorNode, focus = selection.focusNode;
     const anchorOffset = selection.anchorOffset, focusOffset = selection.focusOffset;
     const replacements = new Map();
-    field.querySelectorAll("i").forEach((italic) => {
-      const em = document.createElement("em");
-      em.append(...italic.childNodes);
-      italic.replaceWith(em);
-      replacements.set(italic, em);
+    field.querySelectorAll(source).forEach((original) => {
+      const replacement = document.createElement(tag);
+      replacement.append(...original.childNodes);
+      original.replaceWith(replacement);
+      replacements.set(original, replacement);
     });
     if (replacements.size && anchor && focus) selection.setBaseAndExtent(replacements.get(anchor) ?? anchor, anchorOffset,
       replacements.get(focus) ?? focus, focusOffset);
   };
+  const normalizeParagraphs = () => {
+    const selection = window.getSelection();
+    const boundary = (node, offset) => {
+      if (node !== field) return () => [node, offset];
+      const after = offset === field.childNodes.length;
+      const child = after ? field.lastChild : field.childNodes[offset];
+      return () => child
+        ? [child.parentNode, [...child.parentNode.childNodes].indexOf(child) + Number(after)]
+        : [field.firstElementChild, 0];
+    };
+    const anchor = selection.anchorNode, focus = selection.focusNode;
+    const anchorBoundary = boundary(anchor, selection.anchorOffset);
+    const focusBoundary = boundary(focus, selection.focusOffset);
+    let changed = wrapInlineParagraphs(field);
+    if (!field.childNodes.length) {
+      field.append(document.createElement("p"));
+      changed = true;
+    }
+    if (changed && anchor && focus) selection.setBaseAndExtent(...anchorBoundary(), ...focusBoundary());
+  };
   const update = (group = null) => {
+    semanticMark("b", "strong");
+    normalizeParagraphs();
     record[key] = sanitizeContent(field.innerHTML);
     onChange(record[key]);
     recordHistory(group);
@@ -353,7 +375,7 @@ export function richEditor(record, key, labelText, options = {}) {
       document.execCommand("styleWithCSS", false, false);
       document.execCommand(command, false, value);
       if (command === "italic") emphasizeTyping = mark === "Emphasis" && document.queryCommandState("italic");
-      if (emphasizeTyping) semanticEmphasis();
+      if (emphasizeTyping) semanticMark("i", "em");
     } finally { formatting = false; }
     const range = window.getSelection().getRangeAt(0);
     pendingMark = range.collapsed && ["italic", "underline"].includes(command)
@@ -532,7 +554,7 @@ export function richEditor(record, key, labelText, options = {}) {
   });
   field.addEventListener("input", (event) => {
     if (formatting) return;
-    if (emphasizeTyping) semanticEmphasis();
+    if (emphasizeTyping) semanticMark("i", "em");
     update(["insertText", "deleteContentBackward", "deleteContentForward"].includes(event.inputType) ? event.inputType : null);
     refreshMarks();
   });
