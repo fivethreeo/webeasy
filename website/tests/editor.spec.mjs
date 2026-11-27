@@ -117,27 +117,35 @@ test("landing cover has the menu above its jumbotron and an edge-to-edge square 
   await page.goto("/layout-check.html");
   await expect(page.locator(".jumbotron h1")).toHaveText(starter.pages[0].title);
   await expect(page.locator(".jumbotron .secondary-title")).toHaveText(starter.pages[0].subtitle);
-  for (const width of [390, 1280, 1920]) {
-    await page.setViewportSize({ width, height: 960 });
-    const layout = await page.evaluate(() => {
-      const footer = document.querySelector("body > .site-footer");
-      const bounds = footer.getBoundingClientRect();
-      const cover = document.querySelector(".landing-cover").getBoundingClientRect();
-      const menu = document.querySelector(".landing-cover .site-header").getBoundingClientRect();
-      const title = document.querySelector(".jumbotron").getBoundingClientRect();
-      return { footerLeft: bounds.left, footerWidth: bounds.width, radius: getComputedStyle(footer).borderTopLeftRadius,
-        coverHeight: cover.height, menuBottom: menu.bottom, titleTop: title.top,
-        overflow: document.documentElement.scrollWidth > innerWidth };
-    });
-    expect(layout.footerLeft).toBeCloseTo(0, 0);
-    expect(layout.footerWidth).toBeCloseTo(width, 0);
-    expect(layout.radius).toBe("0px");
-    expect(layout.coverHeight).toBeGreaterThanOrEqual(960);
-    expect(layout.titleTop).toBeGreaterThanOrEqual(layout.menuBottom);
-    expect(layout.overflow).toBe(false);
+  for (const fontSize of ["125%", "250%"]) {
+    await page.evaluate(size => { document.documentElement.style.fontSize = size; }, fontSize);
+    for (const width of [320, 390, 1280, 1920]) {
+      await page.setViewportSize({ width, height: 960 });
+      const layout = await page.evaluate(() => {
+        const footer = document.querySelector("body > .site-footer");
+        const bounds = footer.getBoundingClientRect();
+        const cover = document.querySelector(".landing-cover").getBoundingClientRect();
+        const menu = document.querySelector(".landing-cover .site-header").getBoundingClientRect();
+        const title = document.querySelector(".jumbotron").getBoundingClientRect();
+        return { footerLeft: bounds.left, footerWidth: bounds.width, radius: getComputedStyle(footer).borderTopLeftRadius,
+          coverHeight: cover.height, coverBottom: cover.bottom, menuBottom: menu.bottom,
+          titleTop: title.top, titleBottom: title.bottom,
+          overflow: document.documentElement.scrollWidth > innerWidth };
+      });
+      expect(layout.footerLeft).toBeCloseTo(0, 0);
+      expect(layout.footerWidth).toBeCloseTo(width, 0);
+      expect(layout.radius).toBe("0px");
+      expect(layout.coverHeight).toBeGreaterThanOrEqual(960);
+      expect(layout.titleTop).toBeGreaterThanOrEqual(layout.menuBottom);
+      expect(layout.titleBottom).toBeLessThanOrEqual(layout.coverBottom);
+      expect(layout.overflow, JSON.stringify({ width, fontSize, layout })).toBe(false);
+    }
   }
+  await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
   await page.setViewportSize({ width: 1280, height: 960 });
   await page.screenshot({ path: test.info().outputPath("landing-cover.png"), fullPage: true });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.screenshot({ path: test.info().outputPath("landing-cover-phone.png"), fullPage: true });
 });
 
 test("optional page author and secondary title survive saving and preview as text", async ({ page }) => {

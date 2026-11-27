@@ -42,6 +42,10 @@ body:has(.landing-cover) {
   background: #193e37;
 }
 
+.landing-cover > .center {
+  inline-size: calc(100% - 2 * var(--padding));
+}
+
 .landing-cover-image,
 .landing-cover::before {
   position: absolute;
@@ -70,9 +74,16 @@ body:has(.landing-cover) {
   color: inherit;
 }
 
+.landing-cover .site-logo {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .jumbotron {
   --space: var(--s1);
   padding-block: var(--s3);
+  overflow-wrap: anywhere;
 }
 
 .jumbotron h1 {
