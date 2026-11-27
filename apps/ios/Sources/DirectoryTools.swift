@@ -27,7 +27,7 @@ enum DirectoryTools {
         var files: [String: URL] = [:]
         var directories: Set<String> = []
     }
-    private static let markerName = "webeasy-backup.json"
+    static let markerName = "webeasy-backup.json"
 
     static func folderName(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -156,7 +156,7 @@ enum DirectoryTools {
         }
     }
 
-    private static func fingerprint(_ file: URL) throws -> Entry {
+    static func fingerprint(_ file: URL) throws -> Entry {
         let input = try FileHandle(forReadingFrom: file)
         defer { try? input.close() }
         var digest = SHA256()
@@ -168,7 +168,7 @@ enum DirectoryTools {
         return Entry(size: size, sha256: digest.finalize().map { String(format: "%02x", $0) }.joined())
     }
 
-    private static func readBackup(_ directory: URL) throws -> Backup {
+    static func readBackup(_ directory: URL) throws -> Backup {
         let manifest = try JSONDecoder().decode(Manifest.self, from: limited(directory.appendingPathComponent(markerName), maximum: 16 * 1024 * 1024))
         guard manifest.format == "webeasy-backup", manifest.version == 1, manifest.schemaVersion == 4,
               manifest.id.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .regularExpression) != nil,

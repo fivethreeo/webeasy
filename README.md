@@ -14,8 +14,8 @@ phone photo/video pickers, and static-site export. Template
 examples and the building-block showcase are also bundled. Hosting setup QR codes
 can be read from saved pictures/screenshots or a camera photo. The Hosting tab
 publishes the generated website directly using FTP, explicit FTPS, or SFTP.
-Direct Dropbox integration is not implemented; Advanced directory backups can
-use cloud providers that expose writable folders through the system picker.
+Advanced customization and backups use the configured hosting connection directly,
+not a device-local folder picker. Direct Dropbox integration is not implemented.
 
 **Settings** contains the Simple/Advanced mode selector and **Templates**.
 Links use a native full-screen form like image details, with page selection,
@@ -103,8 +103,9 @@ components, CSS controls, or HTML source panels are exposed in the app showcase.
 In Advanced mode, **Settings > Templates and website assets** explicitly exports
 `webeasy_templates/templates/*.html` (including `master.html`) and
 `webeasy_templates/components/*.html` together with public `assets/` files to a
-chosen directory. Edit its HTML, CSS, JavaScript, images, or fonts, then **Load
-templates and assets from directory**. All expected template files and required
+configured hosting destination and upload subfolder. Edit its HTML, CSS,
+JavaScript, images, or fonts on the server, then **Load templates and assets from
+hosting**. All expected template files and required
 assets must load and validate before either local collection is replaced.
 Unrelated destination files are kept; hidden platform metadata is ignored on import.
 Trusted native editor/generator resources cannot be overridden. Loaded sources and assets are
@@ -230,8 +231,12 @@ sheet, and iOS exports a website folder through Files. Only referenced media,
 generated HTML and website assets are exported, never the editable SQLite
 database, editor, catalog, or hosting credentials.
 
-Advanced **Settings > Database and media backups** remembers a system-selected
-directory and creates backups only when **Back up now** is pressed. Each UTC
+Advanced **Settings > Database and media backups** remembers an absolute private
+server directory and uses the same FTP/FTPS/SFTP hosting credentials. The directory
+must already exist outside the configured website directory, including its upload
+subfolders. Both server paths must be absolute. Configure the web server so this
+private directory is not publicly served; the app cannot verify access rules or
+server path aliases. Backups are created only when **Back up now** is pressed. Each UTC
 `yyyy-MM-dd_HH-mm-ss-SSSZ` folder contains a consistent `webeasy.sqlite`
 snapshot, all `media/` files, and a final `webeasy-backup.json` checksum manifest.
 Sources/assets stored in SQLite and the published-content baseline are included;
@@ -240,9 +245,9 @@ restore after confirmation. Files, database integrity, schema, and media are
 validated before replacement; private recovery storage protects interrupted restores.
 After each successful backup, only verified app-owned directories strictly older
 than 14 days are removed. Modified, incomplete, and unrelated directories are kept.
-Choose a cloud provider through the system folder picker if it supports directories;
-no separate Dropbox account integration is implemented. Hosting credentials remain
-separate and must never go in the website bundle.
+No local folder picker is used for customization or backup/restore. Previous local
+backups are left untouched. Hosting credentials remain separate and must never go
+in the website bundle.
 
 The native **Changes** tab has separate **Unsaved** and **Unpublished** views,
 with before/after values for changed content, ordering, and homepage selection.

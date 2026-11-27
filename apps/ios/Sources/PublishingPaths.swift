@@ -3,7 +3,13 @@ import Foundation
 enum PublishingPaths {
     enum Invalid: LocalizedError {
         case subfolder
-        var errorDescription: String? { "Use a relative upload subfolder without parent segments." }
+        case backupDirectory
+        var errorDescription: String? {
+            switch self {
+            case .subfolder: return "Use a relative upload subfolder without parent segments."
+            case .backupDirectory: return "Use an absolute private server directory outside the website directory. The website directory must also be absolute."
+            }
+        }
     }
 
     static func uploadPrefix(_ subfolder: String?) throws -> String {
@@ -18,5 +24,20 @@ enum PublishingPaths {
                   }
               }) else { throw Invalid.subfolder }
         return value + "/"
+    }
+
+    static func privateBackupDirectory(_ directory: String, website: String, subfolder: String?) throws -> String {
+        func normalized(_ path: String) throws -> String {
+            guard path.hasPrefix("/"), path.count <= 512 else { throw Invalid.backupDirectory }
+            let value = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !value.isEmpty else { throw Invalid.backupDirectory }
+            _ = try uploadPrefix(value)
+            return "/" + value
+        }
+        let target = try normalized(directory.trimmingCharacters(in: .whitespacesAndNewlines))
+        let publicRoot = try normalized(website)
+        _ = try uploadPrefix(subfolder)
+        guard target != publicRoot, !target.hasPrefix(publicRoot + "/") else { throw Invalid.backupDirectory }
+        return target
     }
 }

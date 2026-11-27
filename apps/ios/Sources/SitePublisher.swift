@@ -11,7 +11,7 @@ struct HostingDestination: Codable, Sendable {
     let port: Int
     let username: String
     let password: String
-    let directory: String
+    var directory: String
     var _hostKeyFingerprint: String?
     var publicPathPrefix: String?
     var uploadSubfolder: String?
@@ -54,6 +54,159 @@ private final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unc
 
 enum SitePublisher {
     private static let templateLimit = 256 * 1024
+
+    static func privateBackupDestination(_ destination: HostingDestination, directory: String) throws -> HostingDestination {
+        var result = destination
+        result.directory = try PublishingPaths.privateBackupDirectory(directory, website: destination.directory, subfolder: destination.uploadSubfolder)
+        result.uploadSubfolder = ""
+        return result
+    }
+
+    static func withDirectory<T: Sendable>(_ destination: HostingDestination, create: Bool = false,
+        action: @Sendable (HostingDirectory) async throws -> T) async throws -> T {
+        let prefix = try PublishingPaths.uploadPrefix(destination.uploadSubfolder)
+        let identity = SHA256.hash(data: Data([
+            destination.protocol, destination.host, String(destination.port), destination.username, destination.directory, prefix
+        ].joined(separator: "\n").utf8)).map { String(format: "%02x", $0) }.joined()
+        func scoped(_ directory: HostingDirectory) async throws -> T {
+            if !prefix.isEmpty {
+                if create { try await directory.ensureDirectory(String(prefix.dropLast())) }
+                else {
+                    let parts = prefix.split(separator: "/")
+                    var parent = ""
+                    for part in parts {
+                        guard try await directory.entries(parent).contains(where: { $0.name == String(part) && $0.directory }) else {
+                            throw ContentError.invalid("Hosting upload subfolder is unavailable.")
+                        }
+                        parent += (parent.isEmpty ? "" : "/") + part
+                    }
+                }
+            }
+            let folder = HostingDirectory(identity: identity,
+                list: { try await directory.list(prefix + $0) },
+                mkdir: { try await directory.mkdir(prefix + $0) },
+                download: { try await directory.download(prefix + $0, $1, $2) },
+                upload: { try await directory.upload($0, prefix + $1) },
+                remove: { try await directory.remove(prefix + $0, $1) })
+            return try await action(folder)
+        }
+        do {
+            if destination.protocol == "sftp" {
+                let client = try await sftpClient(destination)
+                do {
+                    let sftp = try await client.openSFTP()
+                    do {
+                        let directory = HostingDirectory(identity: identity,
+                            list: { path in
+                                let listings = try await sftp.listDirectory(atPath: remotePath(destination, path))
+                                return listings.flatMap(\.components).map { file in
+                                    let type = (file.attributes.permissions ?? 0) & 0o170000
+                                    return HostingDirectory.File(name: file.filename, directory: type == 0o040000,
+                                        regular: type == 0o100000, size: file.attributes.size.flatMap { Int64(exactly: $0) } ?? -1)
+                                }
+                            },
+                            mkdir: { try await sftp.createDirectory(atPath: remotePath(destination, $0)) },
+                            download: { path, local, maximum in
+                                try await sftp.withFile(filePath: remotePath(destination, path), flags: [.read]) { file in
+                                    guard FileManager.default.createFile(atPath: local.path, contents: nil) else {
+                                        throw ContentError.invalid("Cannot stage a hosting download.")
+                                    }
+                                    let output = try FileHandle(forWritingTo: local)
+                                    defer { try? output.close() }
+                                    var count: Int64 = 0
+                                    while true {
+                                        let length = count == maximum ? 1 : Int(min(65_536, maximum - count))
+                                        let buffer = try await file.read(from: UInt64(count), length: UInt32(length))
+                                        guard buffer.readableBytes > 0 else { break }
+                                        guard Int64(buffer.readableBytes) <= maximum - count else {
+                                            throw ContentError.invalid("Hosting file exceeds its permitted size.")
+                                        }
+                                        try output.write(contentsOf: Data(buffer.readableBytesView))
+                                        count += Int64(buffer.readableBytes)
+                                    }
+                                    try output.synchronize()
+                                }
+                            },
+                            upload: { local, path in
+                                try await sftp.withFile(filePath: remotePath(destination, path), flags: [.write, .create, .truncate]) { file in
+                                    let input = try FileHandle(forReadingFrom: local)
+                                    defer { try? input.close() }
+                                    var offset: UInt64 = 0
+                                    while let data = try input.read(upToCount: 65_536), !data.isEmpty {
+                                        var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+                                        buffer.writeBytes(data)
+                                        try await file.write(buffer, at: offset)
+                                        offset += UInt64(data.count)
+                                    }
+                                }
+                            },
+                            remove: { path, directory in
+                                if directory { try await sftp.rmdir(at: remotePath(destination, path)) }
+                                else { try await sftp.remove(at: remotePath(destination, path)) }
+                            })
+                        let result = try await scoped(directory)
+                        try await sftp.close()
+                        try await client.close()
+                        return result
+                    } catch { try? await sftp.close(); throw error }
+                } catch { try? await client.close(); throw error }
+            }
+            let provider = try ftpProvider(destination)
+            let directory = HostingDirectory(identity: identity,
+                list: { path in
+                    try await withCheckedThrowingContinuation { continuation in
+                        provider.contentsOfDirectory(path: path) { files, error in
+                            if let error { continuation.resume(throwing: error) }
+                            else {
+                                continuation.resume(returning: files.map {
+                                    HostingDirectory.File(name: $0.name, directory: $0.isDirectory && !$0.isSymLink,
+                                        regular: $0.isRegularFile && !$0.isSymLink, size: $0.size)
+                                })
+                            }
+                        }
+                    }
+                },
+                mkdir: { path in
+                    let parts = path.split(separator: "/")
+                    try await PublishingOperation.directory { done in
+                        provider.create(folder: String(parts.last!), at: parts.dropLast().joined(separator: "/"), completionHandler: done)
+                    }
+                },
+                download: { path, local, maximum in
+                    guard FileManager.default.createFile(atPath: local.path, contents: nil) else {
+                        throw ContentError.invalid("Cannot stage a hosting download.")
+                    }
+                    let output = try FileHandle(forWritingTo: local)
+                    defer { try? output.close() }
+                    var count: Int64 = 0
+                    while true {
+                        let length = count == maximum ? 1 : Int(min(1024 * 1024, maximum - count))
+                        let bytes = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                            provider.contents(path: path, offset: count, length: length) { data, error in
+                                if let error { continuation.resume(throwing: error) }
+                                else if let data { continuation.resume(returning: data) }
+                                else { continuation.resume(throwing: ContentError.invalid("Cannot read hosting file.")) }
+                            }
+                        }
+                        if bytes.isEmpty { break }
+                        guard Int64(bytes.count) <= maximum - count else { throw ContentError.invalid("Hosting file exceeds its permitted size.") }
+                        try output.write(contentsOf: bytes)
+                        count += Int64(bytes.count)
+                        if bytes.count < length { break }
+                    }
+                    try output.synchronize()
+                },
+                upload: { local, path in
+                    try await operation { provider.copyItem(localFile: local, to: path, overwrite: true, completionHandler: $0) }
+                },
+                remove: { path, _ in
+                    try await operation { provider.removeItem(path: path, completionHandler: $0) }
+                })
+            return try await scoped(directory)
+        } catch let approval as HostKeyApproval { throw approval }
+        catch let error as ContentError { throw error }
+        catch { throw ContentError.invalid("Hosting directory operation failed. Check the destination, permissions, certificate or saved server key.") }
+    }
 
     static func loadTemplates(_ destination: HostingDestination, paths: [String]) async throws -> [String: String] {
         guard !paths.isEmpty, paths.allSatisfy({
@@ -106,7 +259,7 @@ enum SitePublisher {
             return sources
         } catch let approval as HostKeyApproval { throw approval }
         catch {
-            throw ContentError.invalid("Cannot load templates. Explicitly export templates and assets from Advanced settings and upload webeasy_templates to the configured hosting destination. Check read permissions, certificate or saved server key. Local templates have not changed.")
+            throw ContentError.invalid("Cannot load templates. Explicitly export templates and assets to hosting from Advanced settings first. Check read permissions, certificate or saved server key. Local templates have not changed.")
         }
     }
 

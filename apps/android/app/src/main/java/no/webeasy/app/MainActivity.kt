@@ -34,7 +34,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
-import androidx.documentfile.provider.DocumentFile
 import androidx.webkit.WebViewAssetLoader
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -77,6 +76,7 @@ class MainActivity : ComponentActivity() {
     private var pendingPublish by mutableStateOf(false)
     private var pendingHostKey by mutableStateOf<HostKeyApproval?>(null)
     private var hostKeyForTemplates = false
+    private var pendingHostingAction by mutableStateOf<(() -> Unit)?>(null)
     private val hosting by lazy { HostingCredentials(this) }
     private var hostingStatus by mutableStateOf("")
     private var hostingServer by mutableStateOf<String?>(null)
@@ -89,35 +89,12 @@ class MainActivity : ComponentActivity() {
     private var publishedContent by mutableStateOf<String?>(null)
     private val automaticSlugs = mutableSetOf<String>()
     private val directoryTools by lazy { DirectoryTools(this) }
-    private enum class DirectoryAction { EXPORT_CUSTOMIZATION, LOAD_CUSTOMIZATION, BACKUP_DIRECTORY }
-    private var directoryAction: DirectoryAction? = null
-    private var backupDirectory by mutableStateOf<Uri?>(null)
+    private var backupDirectory by mutableStateOf("")
     private var backups by mutableStateOf<List<DirectoryTools.Backup>>(emptyList())
     private var pendingRestore by mutableStateOf<DirectoryTools.Backup?>(null)
 
-    private val directoryPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val action = directoryAction
-        directoryAction = null
-        if (uri == null || action == null || !advancedUI || busy) return@registerForActivityResult
-        val directory = runCatching { DocumentFile.fromTreeUri(this, uri) }.getOrNull()
-        if (directory == null || !directory.isDirectory) { status = "Choose a directory."; return@registerForActivityResult }
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }.onFailure {
-            runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        }
-        when (action) {
-            DirectoryAction.EXPORT_CUSTOMIZATION -> exportCustomization(directory)
-            DirectoryAction.LOAD_CUSTOMIZATION -> loadCustomization(directory)
-            DirectoryAction.BACKUP_DIRECTORY -> {
-                backupDirectory = uri
-                getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putString("backup-directory", uri.toString()).apply()
-                refreshBackups()
-            }
-        }
-    }
-
     private fun loadPublishingSettings(connection: JSONObject) {
+        backups = emptyList(); pendingRestore = null; pendingHostingAction = null; pendingHostKey = null
         hostingServer = if (connection.has("host"))
             "${connection.getString("protocol").uppercase(java.util.Locale.ROOT)} ${connection.getString("host")}:${connection.getInt("port")}" else null
         hostingDirectory = connection.optString("directory")
@@ -260,8 +237,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         advancedUI = getSharedPreferences("editor-ui", MODE_PRIVATE).getBoolean("advanced", false)
-        backupDirectory = getSharedPreferences("editor-ui", MODE_PRIVATE).getString("backup-directory", null)?.let(Uri::parse)
-        directoryAction = savedInstanceState?.getString("directoryAction")?.let { name -> DirectoryAction.entries.firstOrNull { it.name == name } }
+        backupDirectory = getSharedPreferences("editor-ui", MODE_PRIVATE).getString("hosting-backup-directory", "") ?: ""
         tab = savedInstanceState?.getInt("selectedTab", 0)?.takeIf { it in 0..4 } ?: 0
         savedInstanceState?.getString("hostingQRPhoto")?.takeIf {
             it.startsWith("hosting-qr-") && it.endsWith(".jpg") && File(it).name == it
@@ -295,7 +271,7 @@ class MainActivity : ComponentActivity() {
                     confirmButton = { Button(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text("Publish") } },
                     dismissButton = { OutlinedButton(onClick = { pendingPublish = false }) { Text("Cancel") } })
                 pendingHostKey?.let { key ->
-                    AlertDialog(onDismissRequest = { pendingHostKey = null }, title = { Text("Trust SFTP server key?") },
+                    AlertDialog(onDismissRequest = { pendingHostKey = null; pendingHostingAction = null }, title = { Text("Trust SFTP server key?") },
                         text = { Text("${key.host}:${key.port}\n${key.fingerprint}\nCompare this fingerprint with your server before trusting it. No password has been sent.") },
                         confirmButton = { Button(onClick = {
                             runCatching {
@@ -303,10 +279,12 @@ class MainActivity : ComponentActivity() {
                                 check(connection.getString("host") == key.host && connection.getInt("port") == key.port)
                                 hosting.save(connection.put("_hostKeyFingerprint", key.fingerprint))
                                 pendingHostKey = null
-                                if (hostKeyForTemplates) loadServerTemplates() else generate(true, publish = true)
+                                val action = pendingHostingAction
+                                pendingHostingAction = null
+                                if (action != null) action() else if (hostKeyForTemplates) loadServerTemplates() else generate(true, publish = true)
                             }.onFailure { status = "Cannot save the trusted server key." }
-                        }) { Text(if (hostKeyForTemplates) "Trust and load" else "Trust and publish") } },
-                        dismissButton = { OutlinedButton(onClick = { pendingHostKey = null }) { Text("Cancel") } })
+                        }) { Text(if (pendingHostingAction != null) "Trust and continue" else if (hostKeyForTemplates) "Trust and load" else "Trust and publish") } },
+                        dismissButton = { OutlinedButton(onClick = { pendingHostKey = null; pendingHostingAction = null }) { Text("Cancel") } })
                 }
                 pendingBack?.let { target ->
                     AlertDialog(onDismissRequest = { pendingBack = null }, title = { Text("Save changes?") },
@@ -387,7 +365,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        directoryAction?.let { outState.putString("directoryAction", it.name) }
         pendingQRPhoto?.let { outState.putString("hostingQRPhoto", it.name) }
         outState.putInt("selectedTab", tab)
         super.onSaveInstanceState(outState)
@@ -559,10 +536,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun chooseDirectory(action: DirectoryAction) {
-        if (!advancedUI || busy) return
-        directoryAction = action
-        directoryPicker.launch(if (action == DirectoryAction.BACKUP_DIRECTORY) backupDirectory else null)
+    private fun hostingFailure(error: Throwable, fallback: String, retry: () -> Unit) {
+        busy = false
+        if (error is HostKeyApproval) {
+            pendingHostingAction = retry
+            pendingHostKey = error
+            status = "Confirm the SFTP server key before continuing."
+        } else {
+            pendingHostingAction = null
+            status = error.message ?: fallback
+        }
+    }
+
+    private fun directoryConnection(backups: Boolean = false): JSONObject {
+        check(!publishingSettingsChanged()) { "Save publishing settings first." }
+        val connection = hosting.load() ?: error("Add hosting first.")
+        return if (backups) SitePublisher.privateBackupConnection(connection, backupDirectory) else connection
     }
 
     @Composable
@@ -570,29 +559,34 @@ class MainActivity : ComponentActivity() {
         if (!advancedUI) return
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text("Templates and website assets", style = MaterialTheme.typography.titleLarge)
-            Text("Export to a directory, edit its webeasy_templates and assets folders, then load that directory. Loading replaces the current customization as a complete batch.")
-            OutlinedButton(onClick = { chooseDirectory(DirectoryAction.EXPORT_CUSTOMIZATION) }, enabled = ready && !busy && project != null) {
-                Text("Export templates and assets")
+            Text("Export to the configured hosting destination, edit its webeasy_templates and assets folders, then load them back. Loading replaces the current customization as a complete batch.")
+            Text("Hosting directory: $hostingDirectory${if (uploadSubfolder.isNotEmpty()) "/$uploadSubfolder" else ""}")
+            OutlinedButton(onClick = ::exportCustomization, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
+                Text("Export templates and assets to hosting")
             }
-            OutlinedButton(onClick = { chooseDirectory(DirectoryAction.LOAD_CUSTOMIZATION) }, enabled = ready && !busy && project != null) {
-                Text("Load templates and assets")
+            OutlinedButton(onClick = ::loadCustomization, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
+                Text("Load templates and assets from hosting")
             }
             Text("Website CSS, JavaScript, images and fonts can be customized. Native editor resources stay protected. Files are exported only when requested; normal publishing does not write template-source copies.")
             if (busy) CircularProgressIndicator()
         }
     }
 
-    private fun exportCustomization(directory: DocumentFile) {
+    private fun exportCustomization() {
         if (!advancedUI || busy || project == null) return
         busy = true; status = "Exporting templates and website assets..."
         worker.execute {
-            runCatching { directoryTools.exportCustomization(directory, store.customizationFiles()) }.fold(
-                onSuccess = { runOnUiThread { busy = false; status = "Templates and website assets exported." } },
-                onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot export customization." } })
+            runCatching {
+                SitePublisher.withDirectory(directoryConnection(), create = true) {
+                    directoryTools.exportCustomization(it, store.customizationFiles())
+                }
+            }.fold(
+                onSuccess = { runOnUiThread { busy = false; status = "Templates and website assets exported to hosting." } },
+                onFailure = { runOnUiThread { hostingFailure(it, "Cannot export customization.", ::exportCustomization) } })
         }
     }
 
-    private fun loadCustomization(directory: DocumentFile) {
+    private fun loadCustomization() {
         if (!advancedUI || busy || catalog == null || project == null || !ready) return
         busy = true; status = "Loading templates and website assets..."
         val current = catalog!!
@@ -602,7 +596,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         worker.execute {
-            runCatching { directoryTools.loadCustomization(directory, paths) }.fold(onSuccess = { loaded -> runOnUiThread {
+            runCatching {
+                SitePublisher.withDirectory(directoryConnection()) { directoryTools.loadCustomization(it, paths) }
+            }.fold(onSuccess = { loaded -> runOnUiThread {
                 val input = JSONObject().put("catalog", current).put("sources", loaded.sources).put("project", project)
                 generator.evaluateJavascript("window.WebeasyGenerator.loadTemplates(${JSONObject.quote(input.toString())})") { response ->
                     val updated = runCatching {
@@ -621,7 +617,7 @@ class MainActivity : ComponentActivity() {
                             onFailure = { runOnUiThread { busy = false; status = "Cannot save customization. Current customization is unchanged." } })
                     }
                 }
-            } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot read customization directory." } })
+            } }, onFailure = { runOnUiThread { hostingFailure(it, "Cannot read customization from hosting.", ::loadCustomization) } })
         }
     }
 
@@ -632,10 +628,13 @@ class MainActivity : ComponentActivity() {
             item {
                 Text("Database and media backups", style = MaterialTheme.typography.titleLarge)
                 Text("Backups contain saved SQLite content, customizations and stored media, not hosting credentials. Save current edits first. Each backup gets a UTC datetime directory.")
-                OutlinedButton(onClick = { chooseDirectory(DirectoryAction.BACKUP_DIRECTORY) }, enabled = !busy) { Text("Choose backup directory") }
-                Text(if (backupDirectory == null) "No backup directory selected." else "Backup directory selected.")
-                OutlinedButton(onClick = ::createBackup, enabled = ready && !busy && backupDirectory != null) { Text("Back up database and media") }
-                OutlinedButton(onClick = ::refreshBackups, enabled = !busy && backupDirectory != null) { Text("Refresh backups") }
+                Text("Backups use the same hosting connection, in an existing private server directory outside the public website folder. The app cannot verify your web server's access rules.")
+                OutlinedTextField(value = backupDirectory, onValueChange = {
+                    backupDirectory = it; backups = emptyList(); pendingRestore = null; pendingHostingAction = null
+                    getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putString("hosting-backup-directory", it).apply()
+                }, label = { Text("Private server backup directory") }, singleLine = true, enabled = !busy)
+                OutlinedButton(onClick = ::createBackup, enabled = ready && !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text("Back up database and media to hosting") }
+                OutlinedButton(onClick = ::refreshBackups, enabled = !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text("Refresh hosting backups") }
                 Text("After a successful backup, completed app-created backups older than 14 days are removed. Unrelated files and directories are kept.")
                 if (busy) CircularProgressIndicator()
             }
@@ -650,30 +649,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun backupRoot(): DocumentFile = backupDirectory?.let { DocumentFile.fromTreeUri(this, it) }
-        ?.takeIf { it.isDirectory } ?: error("Choose an accessible backup directory first.")
-
     private fun refreshBackups() {
-        if (!advancedUI || busy || backupDirectory == null) return
+        if (!advancedUI || busy || backupDirectory.isBlank() || hostingServer == null) return
         busy = true
         worker.execute {
-            runCatching { directoryTools.backups(backupRoot()) }.fold(
+            runCatching { SitePublisher.withDirectory(directoryConnection(backups = true)) { directoryTools.backups(it) } }.fold(
                 onSuccess = { runOnUiThread { backups = it; busy = false } },
-                onFailure = { runOnUiThread { backups = emptyList(); busy = false; status = it.message ?: "Cannot read backups." } })
+                onFailure = { runOnUiThread { backups = emptyList(); hostingFailure(it, "Cannot read hosting backups.", ::refreshBackups) } })
         }
     }
 
     private fun createBackup() {
-        if (!advancedUI || busy || backupDirectory == null || !ready) return
+        if (!advancedUI || busy || backupDirectory.isBlank() || !ready) return
         busy = true; status = "Backing up saved database and media..."
         worker.execute {
             runCatching {
-                val root = backupRoot()
                 val snapshot = store.backupSnapshot()
-                try { directoryTools.backup(root, snapshot) } finally { snapshot.deleteRecursively() }
-                directoryTools.backups(root)
+                try {
+                    SitePublisher.withDirectory(directoryConnection(backups = true)) {
+                        directoryTools.backup(it, snapshot)
+                        directoryTools.backups(it)
+                    }
+                } finally { snapshot.deleteRecursively() }
             }.fold(onSuccess = { runOnUiThread { backups = it; busy = false; status = "Backup created; older app-owned backups checked for cleanup." } },
-                onFailure = { runOnUiThread { busy = false; status = it.message ?: "Cannot create backup." } })
+                onFailure = { runOnUiThread { hostingFailure(it, "Cannot create hosting backup.", ::createBackup) } })
         }
     }
 
@@ -683,7 +682,11 @@ class MainActivity : ComponentActivity() {
         worker.execute {
             runCatching {
                 store.restoreOperation {
-                    val snapshot = directoryTools.restoreSnapshot(backup)
+                    val snapshot = SitePublisher.withDirectory(directoryConnection(backups = true)) { root ->
+                        val directory = root.findFile(backup.directory.name!!) ?: error("Backup no longer exists.")
+                        check(directory.uri == backup.directory.uri) { "Hosting destination changed. Refresh backups first." }
+                        directoryTools.restoreSnapshot(backup.copy(directory = directory))
+                    }
                     try { store.restoreSnapshot(snapshot) } finally { snapshot.deleteRecursively() }
                     Triple(store.project(), currentCatalog(), store.publishedSnapshot())
                 }
@@ -693,7 +696,7 @@ class MainActivity : ComponentActivity() {
                 drafts.markSaved(drafts.capture(content)); automaticSlugs.clear()
                 screens.clear(); tab = 2; revision++; busy = false
                 status = "Database, media and customizations restored. Hosting credentials unchanged."
-            } }, onFailure = { runOnUiThread { busy = false; status = it.message ?: "Restore failed; current content was preserved." } })
+            } }, onFailure = { runOnUiThread { hostingFailure(it, "Restore failed; current content was preserved.", { restoreBackup(backup) }) } })
         }
     }
 

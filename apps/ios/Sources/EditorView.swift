@@ -63,7 +63,13 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     }
     @Published var busy = false
     @Published var backups: [DirectoryTools.Backup] = []
-    @Published var backupDirectoryName: String?
+    @Published var backupDirectory = UserDefaults.standard.string(forKey: "hostingBackupDirectory") ?? "" {
+        didSet {
+            UserDefaults.standard.set(backupDirectory, forKey: "hostingBackupDirectory")
+            backups = []
+            pendingHostingAction = nil
+        }
+    }
     @Published var restoreRevision = 0
     @Published var preview: NativePreview?
     @Published var homePageID: String?
@@ -71,6 +77,12 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
     let store: ContentStore?
     @Published var catalog: Catalog?
     var hostKeyForTemplates = false
+    enum HostingAction {
+        case exportCustomization, loadCustomization, refreshBackups, createBackup
+        case restoreBackup(DirectoryTools.Backup)
+    }
+    var pendingHostingAction: HostingAction?
+    var hasHosting: Bool { HostingCredentials.load() != nil }
     private var media: [[String: Any]] = []
     private let generator = WKWebView()
     private var revision = 0
@@ -182,6 +194,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             connection["uploadSubfolder"] = previous.uploadSubfolder
         }
         try HostingCredentials.save(JSONSerialization.data(withJSONObject: connection))
+        backups = []; pendingHostingAction = nil; pendingHostKey = nil
         return "Saved hosting: \(connection["host"] as? String ?? ""). Not connected yet."
     }
 
@@ -207,6 +220,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         destination.publicPathPrefix = normalized["publicPathPrefix"]
         destination.uploadSubfolder = normalized["uploadSubfolder"]
         try HostingCredentials.save(JSONEncoder().encode(destination))
+        backups = []; pendingHostingAction = nil; pendingHostKey = nil
         return destination
     }
 
@@ -409,7 +423,16 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             destination._hostKeyFingerprint = key.fingerprint
             try HostingCredentials.save(JSONEncoder().encode(destination))
             pendingHostKey = nil
-            if hostKeyForTemplates { loadServerTemplates() }
+            if let action = pendingHostingAction {
+                pendingHostingAction = nil
+                switch action {
+                case .exportCustomization: exportCustomization()
+                case .loadCustomization: loadCustomization()
+                case .refreshBackups: refreshBackups()
+                case .createBackup: createBackup()
+                case .restoreBackup(let backup): restoreBackup(backup)
+                }
+            } else if hostKeyForTemplates { loadServerTemplates() }
             else { site(nil, export: false, publish: true) }
         } catch { status = error.localizedDescription }
     }
@@ -456,30 +479,22 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         }
     }
 
-    private func backupRoot() throws -> URL {
-        guard let data = UserDefaults.standard.data(forKey: "backupDirectory") else {
-            throw ContentError.invalid("Choose a backup directory first.")
-        }
-        var stale = false
-        let root = try URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
-        if stale {
-            let renewed = try DirectoryTools.access(root, writing: false) {
-                try $0.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-            }
-            UserDefaults.standard.set(renewed, forKey: "backupDirectory")
-        }
-        return root
+    private func hostingDestination(backup: Bool = false) throws -> HostingDestination {
+        guard let data = HostingCredentials.load() else { throw ContentError.invalid("Import your hosting setup QR first.") }
+        let destination = try JSONDecoder().decode(HostingDestination.self, from: data)
+        if backup { return try SitePublisher.privateBackupDestination(destination, directory: backupDirectory) }
+        return destination
     }
 
-    func selectBackupDirectory(_ root: URL) {
-        guard advancedUI, !busy else { return }
-        do {
-            let data = try DirectoryTools.access(root, writing: false) {
-                try $0.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
-            }
-            UserDefaults.standard.set(data, forKey: "backupDirectory")
-            refreshBackups()
-        } catch { status = error.localizedDescription }
+    private func hostingFailure(_ error: Error, retry: HostingAction) {
+        if let approval = error as? HostKeyApproval {
+            pendingHostingAction = retry
+            pendingHostKey = approval
+            status = "Confirm the SFTP server key before continuing."
+        } else {
+            pendingHostingAction = nil
+            status = error.localizedDescription
+        }
     }
 
     func refreshBackups() {
@@ -488,29 +503,30 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         Task {
             defer { busy = false }
             do {
-                let root = try backupRoot()
-                backups = try await Task.detached { try DirectoryTools.backups(root) }.value
-                backupDirectoryName = root.lastPathComponent
-                status = "Completed backups in the selected directory."
-            } catch { backups = []; status = error.localizedDescription }
+                let destination = try hostingDestination(backup: true)
+                backups = try await SitePublisher.withDirectory(destination) { try await HostingTools.backups($0) }
+                status = "Completed backups in the private server directory."
+            } catch { backups = []; hostingFailure(error, retry: .refreshBackups) }
         }
     }
 
-    func exportCustomization(_ root: URL) {
+    func exportCustomization() {
         guard advancedUI, ready, !busy, let store else { return }
         busy = true
         Task {
             defer { busy = false }
             do {
-                try await Task.detached {
-                    try DirectoryTools.exportCustomization(root, files: store.customizationFiles())
-                }.value
-                status = "Templates and website assets exported. Unrelated directory files were kept."
-            } catch { status = error.localizedDescription }
+                let destination = try hostingDestination()
+                let files = try await Task.detached { try store.customizationFiles() }.value
+                try await SitePublisher.withDirectory(destination, create: true) {
+                    try await HostingTools.exportCustomization($0, files: files)
+                }
+                status = "Templates and website assets exported to hosting. Unrelated server files were kept."
+            } catch { hostingFailure(error, retry: .exportCustomization) }
         }
     }
 
-    func loadCustomization(_ root: URL) {
+    func loadCustomization() {
         guard advancedUI, ready, !busy, let store else { return }
         busy = true
         Task {
@@ -520,9 +536,10 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                 let output = try await templateCall("templates", input: current)
                 guard let expected = output["sources"] as? [String: String] else { throw ContentError.invalid("Cannot list templates.") }
                 let paths = expected.keys.sorted()
-                let customization = try await Task.detached {
-                    try DirectoryTools.loadCustomization(root, sourcePaths: paths)
-                }.value
+                let destination = try hostingDestination()
+                let customization = try await SitePublisher.withDirectory(destination) {
+                    try await HostingTools.loadCustomization($0, sourcePaths: paths)
+                }
                 let sources = try JSONDecoder().decode([String: String].self, from: customization.sources)
                 let loaded = try await templateCall("loadTemplates", input: ["catalog": current, "sources": sources, "project": project])
                 guard let object = loaded["catalog"] else { throw ContentError.invalid("Cannot read templates.") }
@@ -530,7 +547,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                 try await Task.detached { try store.saveCustomization(customization.sources, assets: customization.assets) }.value
                 catalog = updated
                 status = "Templates and website assets loaded and saved. Previews and publishing use them."
-            } catch { status = "Customization not loaded: \(error.localizedDescription)" }
+            } catch { hostingFailure(error, retry: .loadCustomization) }
         }
     }
 
@@ -540,15 +557,15 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         Task {
             defer { busy = false }
             do {
-                let root = try backupRoot()
-                backups = try await Task.detached {
-                    let snapshot = try store.backupSnapshot()
-                    defer { try? FileManager.default.removeItem(at: snapshot) }
-                    _ = try DirectoryTools.backup(root, snapshot: snapshot)
-                    return try DirectoryTools.backups(root)
-                }.value
-                status = "Backup created; older app-owned backups checked for cleanup."
-            } catch { status = error.localizedDescription }
+                let destination = try hostingDestination(backup: true)
+                let snapshot = try await Task.detached { try store.backupSnapshot() }.value
+                defer { try? FileManager.default.removeItem(at: snapshot) }
+                backups = try await SitePublisher.withDirectory(destination) {
+                    _ = try await HostingTools.backup($0, snapshot: snapshot)
+                    return try await HostingTools.backups($0)
+                }
+                status = "Backup created on hosting; older verified app-owned backups checked for cleanup."
+            } catch { hostingFailure(error, retry: .createBackup) }
         }
     }
 
@@ -558,12 +575,12 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         Task {
             defer { busy = false }
             do {
-                let root = try backupRoot()
+                let destination = try hostingDestination(backup: true)
+                let snapshot = try await SitePublisher.withDirectory(destination) {
+                    try await HostingTools.restoreSnapshot($0, backup: backup)
+                }
+                defer { try? FileManager.default.removeItem(at: snapshot) }
                 let (data, catalogData, published) = try await Task.detached {
-                    let scoped = root.startAccessingSecurityScopedResource()
-                    defer { if scoped { root.stopAccessingSecurityScopedResource() } }
-                    let snapshot = try DirectoryTools.restoreSnapshot(backup)
-                    defer { try? FileManager.default.removeItem(at: snapshot) }
                     try store.restoreSnapshot(snapshot)
                     return (try JSONSerialization.data(withJSONObject: store.project()),
                             try Catalog.data(sources: store.templateSources()), try store.publishedSnapshot())
@@ -580,7 +597,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
                 savedNodes = try snapshot(); savedHomePageID = homePageID
                 automaticSlugs.removeAll(); revision += 1; restoreRevision += 1
                 status = "Database, media and customizations restored. Hosting credentials unchanged."
-            } catch { status = "Restore failed: \(error.localizedDescription)" }
+            } catch { hostingFailure(error, retry: .restoreBackup(backup)) }
         }
     }
 
@@ -621,9 +638,6 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
 @MainActor
 struct EditorView: View {
     @StateObject private var model = NativeEditorModel()
-    private enum DirectoryAction { case exportCustomization, loadCustomization, backupDirectory }
-    @State private var directoryAction = DirectoryAction.exportCustomization
-    @State private var choosingDirectory = false
     @State private var selectedBackup: DirectoryTools.Backup?
 
     var body: some View {
@@ -635,16 +649,6 @@ struct EditorView: View {
             HostingView(model: model).tabItem { Label("Hosting", systemImage: "network") }
         }
         .id(model.restoreRevision)
-        .fileImporter(isPresented: $choosingDirectory, allowedContentTypes: [.folder]) { result in
-            do {
-                let root = try result.get()
-                switch directoryAction {
-                case .exportCustomization: model.exportCustomization(root)
-                case .loadCustomization: model.loadCustomization(root)
-                case .backupDirectory: model.selectBackupDirectory(root)
-                }
-            } catch { model.status = error.localizedDescription }
-        }
         .alert("Restore this backup?", isPresented: Binding(get: { selectedBackup != nil },
             set: { if !$0 { selectedBackup = nil } }), presenting: selectedBackup) { backup in
             Button("Restore", role: .destructive) { model.restoreBackup(backup) }
@@ -665,8 +669,8 @@ struct EditorView: View {
             }
         }
         .alert("Trust SFTP server key?", isPresented: Binding(get: { model.pendingHostKey != nil },
-            set: { if !$0 { model.pendingHostKey = nil } }), presenting: model.pendingHostKey) { key in
-            Button(model.hostKeyForTemplates ? "Trust and load" : "Trust and publish") { model.trustHostKey(key) }
+            set: { if !$0 { model.pendingHostKey = nil; model.pendingHostingAction = nil } }), presenting: model.pendingHostKey) { key in
+            Button(model.pendingHostingAction != nil ? "Trust and continue" : model.hostKeyForTemplates ? "Trust and load" : "Trust and publish") { model.trustHostKey(key) }
             Button("Cancel", role: .cancel) {}
         } message: { key in
             Text("\(key.host):\(key.port)\n\(key.fingerprint)\nCompare this fingerprint with your server before trusting it. No password has been sent.")
@@ -723,7 +727,7 @@ struct EditorView: View {
                     }
                 }
                 if model.advancedUI {
-                    Section("Advanced directory tools") {
+                    Section("Advanced hosting tools") {
                         NavigationLink("Templates and website assets") { customizations() }
                         NavigationLink("Database and media backups") { backups() }
                     }
@@ -738,7 +742,7 @@ struct EditorView: View {
             Text(model.status)
             if model.advancedUI {
                 Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
-                Text("Export templates and assets explicitly from Advanced settings. Upload webeasy_templates to your hosting to load its edited HTML here.")
+                Text("Export templates and assets explicitly to hosting from Advanced settings, then load the edited HTML here.")
             }
             if model.busy { ProgressView() }
             Section("Page templates") {
@@ -755,18 +759,14 @@ struct EditorView: View {
         .navigationTitle(title)
     }
 
-    private func chooseDirectory(_ action: DirectoryAction) {
-        directoryAction = action; choosingDirectory = true
-    }
-
     private func customizations() -> some View {
         Form {
             Text(model.status)
-            Text("Export editable templates and public website assets together. Edit the directory, then load both back. Native editor resources cannot be changed.")
-            Button("Export templates and assets to directory") { chooseDirectory(.exportCustomization) }
-                .disabled(!model.advancedUI || !model.ready || model.busy)
-            Button("Load templates and assets from directory") { chooseDirectory(.loadCustomization) }
-                .disabled(!model.advancedUI || !model.ready || model.busy)
+            Text("Export editable templates and public website assets to the configured hosting destination and upload subfolder. Edit them on the server, then load both back. Native editor resources cannot be changed.")
+            Button("Export templates and assets to hosting") { model.exportCustomization() }
+                .disabled(!model.advancedUI || !model.ready || model.busy || !model.hasHosting)
+            Button("Load templates and assets from hosting") { model.loadCustomization() }
+                .disabled(!model.advancedUI || !model.ready || model.busy || !model.hasHosting)
             Text("Normal website publishing exports required assets, not editable template-source copies.")
             if model.busy { ProgressView() }
         }.navigationTitle("Website customization")
@@ -775,11 +775,14 @@ struct EditorView: View {
     private func backups() -> some View {
         List {
             Text(model.status)
-            Text("Back up saved SQLite content, customizations and all media to UTC datetime directories. Unsaved edits are not included.")
-            if let name = model.backupDirectoryName { Text("Directory: \(name)") }
-            Button("Choose backup directory") { chooseDirectory(.backupDirectory) }.disabled(model.busy)
-            Button("Back up now") { model.createBackup() }.disabled(!model.ready || model.busy)
-            Button("Refresh backups") { model.refreshBackups() }.disabled(model.busy)
+            Text("Back up saved SQLite content, customizations and all media on hosting in UTC datetime directories. Unsaved edits are not included.")
+            LabeledTextField(title: "Private server backup directory", text: $model.backupDirectory)
+                .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(model.busy)
+            Text("Use an existing absolute server directory outside the public website folder, with the same hosting credentials. Backups contain unpublished content; the app cannot verify your web server's access rules.")
+            Button("Back up now") { model.createBackup() }
+                .disabled(!model.advancedUI || !model.ready || model.busy || !model.hasHosting || model.backupDirectory.isEmpty)
+            Button("Refresh backups") { model.refreshBackups() }
+                .disabled(!model.advancedUI || model.busy || !model.hasHosting || model.backupDirectory.isEmpty)
             Text("After a successful backup, verified app-owned backups older than two weeks are removed. Unrelated or modified directories are kept.")
             ForEach(model.backups) { backup in
                 Button(backup.directory.lastPathComponent) { selectedBackup = backup }.disabled(model.busy)
@@ -787,7 +790,8 @@ struct EditorView: View {
             if model.busy { ProgressView() }
         }
         .navigationTitle("Database and media backups")
-        .onAppear { model.refreshBackups() }
+        .onChange(of: model.backupDirectory) { _, _ in selectedBackup = nil }
+        .onAppear { if model.hasHosting && !model.backupDirectory.isEmpty { model.refreshBackups() } }
     }
 }
 

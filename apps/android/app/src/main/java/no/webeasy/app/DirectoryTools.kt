@@ -16,8 +16,13 @@ import java.util.UUID
 
 internal class DirectoryTools(private val context: Context) {
     data class Customization(val sources: JSONObject, val assets: Map<String, ByteArray>)
-    data class Backup(val directory: DocumentFile, val createdAt: Instant, val files: JSONObject, val id: String)
-    private data class Inventory(val files: Map<String, DocumentFile>, val directories: Map<String, DocumentFile>)
+    data class Backup(val directory: DirectoryFile, val createdAt: Instant, val files: JSONObject, val id: String)
+    private data class Inventory(val files: Map<String, DirectoryFile>, val directories: Map<String, DirectoryFile>)
+    fun exportCustomization(root: DocumentFile, files: Map<String, ByteArray>) = exportCustomization(DeviceDirectoryFile(context, root), files)
+    fun loadCustomization(root: DocumentFile, sourcePaths: List<String>) = loadCustomization(DeviceDirectoryFile(context, root), sourcePaths)
+    fun backup(root: DocumentFile, snapshot: File, now: Instant = Instant.now()) = backup(DeviceDirectoryFile(context, root), snapshot, now)
+    fun backups(root: DocumentFile) = backups(DeviceDirectoryFile(context, root))
+    fun cleanup(root: DocumentFile, now: Instant = Instant.now()) = cleanup(DeviceDirectoryFile(context, root), now)
 
     private val folderFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS'Z'").withZone(ZoneOffset.UTC)
     private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)
@@ -26,7 +31,7 @@ internal class DirectoryTools(private val context: Context) {
     private fun validPath(path: String): Boolean = path.matches(Regex("[A-Za-z0-9][A-Za-z0-9._/-]*")) &&
         path.split("/").none { it.isEmpty() || it == "." || it == ".." }
 
-    private fun find(root: DocumentFile, path: String): DocumentFile? {
+    private fun find(root: DirectoryFile, path: String): DirectoryFile? {
         require(validPath(path)) { "Invalid directory path." }
         var current = root
         for (part in path.split("/")) {
@@ -36,7 +41,7 @@ internal class DirectoryTools(private val context: Context) {
         return current
     }
 
-    private fun createFile(root: DocumentFile, path: String): DocumentFile {
+    private fun createFile(root: DirectoryFile, path: String): DirectoryFile {
         require(validPath(path))
         val parts = path.split("/")
         var directory = root
@@ -53,12 +58,11 @@ internal class DirectoryTools(private val context: Context) {
         return file
     }
 
-    private fun read(file: DocumentFile): InputStream =
-        context.contentResolver.openInputStream(file.uri) ?: error("Cannot read a file from this directory.")
+    private fun read(file: DirectoryFile): InputStream = file.input()
 
-    private fun write(file: DocumentFile, input: InputStream) {
+    private fun write(file: DirectoryFile, input: InputStream) {
         input.use { source ->
-            val target = context.contentResolver.openOutputStream(file.uri, "wt") ?: error("Cannot write to this directory.")
+            val target = file.output()
             target.use { source.copyTo(it) }
         }
     }
@@ -76,11 +80,11 @@ internal class DirectoryTools(private val context: Context) {
         }
     }
 
-    private fun inventory(root: DocumentFile, ignoreHidden: Boolean = false): Inventory {
-        val files = linkedMapOf<String, DocumentFile>()
-        val directories = linkedMapOf<String, DocumentFile>()
+    private fun inventory(root: DirectoryFile, ignoreHidden: Boolean = false): Inventory {
+        val files = linkedMapOf<String, DirectoryFile>()
+        val directories = linkedMapOf<String, DirectoryFile>()
         val visited = mutableSetOf<String>()
-        fun visit(directory: DocumentFile, prefix: String, depth: Int) {
+        fun visit(directory: DirectoryFile, prefix: String, depth: Int) {
             require(depth <= 16 && visited.add(directory.uri.toString())) { "Invalid directory structure." }
             for (file in directory.listFiles()) {
                 val name = file.name ?: error("Directory entry has no name.")
@@ -98,12 +102,12 @@ internal class DirectoryTools(private val context: Context) {
         return Inventory(files, directories)
     }
 
-    fun exportCustomization(root: DocumentFile, files: Map<String, ByteArray>) {
+    fun exportCustomization(root: DirectoryFile, files: Map<String, ByteArray>) {
         require(root.isDirectory && root.canWrite()) { "Choose a writable directory." }
         for ((path, bytes) in files) write(createFile(root, path), bytes.inputStream())
     }
 
-    fun loadCustomization(root: DocumentFile, sourcePaths: List<String>): Customization {
+    fun loadCustomization(root: DirectoryFile, sourcePaths: List<String>): Customization {
         val sources = JSONObject()
         for (path in sourcePaths) {
             val file = find(root, path)?.takeIf { it.isFile } ?: error("Missing template: $path")
@@ -138,12 +142,12 @@ internal class DirectoryTools(private val context: Context) {
         size to hash.digest().joinToString("") { "%02x".format(it) }
     }
 
-    fun backup(root: DocumentFile, snapshot: File, now: Instant = Instant.now()): Backup {
+    fun backup(root: DirectoryFile, snapshot: File, now: Instant = Instant.now()): Backup {
         require(root.isDirectory && root.canWrite()) { "Choose a writable backup directory." }
         val name = folderFormat.format(now)
         require(root.findFile(name) == null) { "A backup already exists at this time. Try again." }
         val directory = root.createDirectory(name) ?: error("Cannot create backup directory.")
-        val created = mutableListOf<DocumentFile>()
+        val created = mutableListOf<DirectoryFile>()
         val paths = mutableSetOf<String>()
         try {
             val entries = JSONObject()
@@ -173,7 +177,7 @@ internal class DirectoryTools(private val context: Context) {
         }
     }
 
-    private fun readBackup(directory: DocumentFile): Backup {
+    private fun readBackup(directory: DirectoryFile): Backup {
         val marker = directory.findFile(manifestName)?.takeIf { it.isFile } ?: error("Not a completed Webeasy backup.")
         val manifest = JSONObject(limited(read(marker), 16 * 1024 * 1024).toString(Charsets.UTF_8))
         require(manifest.optString("format") == "webeasy-backup" && manifest.optInt("version") == 1 &&
@@ -191,7 +195,7 @@ internal class DirectoryTools(private val context: Context) {
         return Backup(directory, date, files, manifest.getString("id"))
     }
 
-    fun backups(root: DocumentFile): List<Backup> = root.listFiles().filter { it.isDirectory }
+    fun backups(root: DirectoryFile): List<Backup> = root.listFiles().filter { it.isDirectory }
         .mapNotNull { runCatching { readBackup(it) }.getOrNull() }.sortedByDescending { it.createdAt }
 
     fun restoreSnapshot(backup: Backup): File {
@@ -222,7 +226,7 @@ internal class DirectoryTools(private val context: Context) {
         } catch (error: Exception) { directory.deleteRecursively(); throw error }
     }
 
-    fun cleanup(root: DocumentFile, now: Instant = Instant.now()) {
+    fun cleanup(root: DirectoryFile, now: Instant = Instant.now()) {
         val cutoff = now.truncatedTo(java.time.temporal.ChronoUnit.MILLIS).minus(Duration.ofDays(14))
         for (backup in backups(root)) {
             if (!backup.createdAt.isBefore(cutoff) || backup.directory.name != folderFormat.format(backup.createdAt)) continue
@@ -249,7 +253,7 @@ internal class DirectoryTools(private val context: Context) {
         (1 until parts.size).map { parts.take(it).joinToString("/") }
     }.toSet()
 
-    private fun deleteEmptyDirectories(root: DocumentFile, parents: Set<String>) {
+    private fun deleteEmptyDirectories(root: DirectoryFile, parents: Set<String>) {
         for (path in parents.sortedByDescending { it.count { char -> char == '/' } }) {
             val directory = find(root, path)
             if (directory?.isDirectory == true && directory.listFiles().isEmpty()) directory.delete()

@@ -23,6 +23,9 @@ import java.io.IOException
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import androidx.test.core.app.ApplicationProvider
+import android.content.Context
+import java.time.Instant
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -80,6 +83,68 @@ class SitePublisherTest {
     fun ftpUploadsGeneratedFilesOverwritesExistingHomeAndPreservesUnrelatedFiles() {
         val root = remote()
         ftp(root) { port -> SitePublisher.publish(connection("ftp", port), site()); checkFiles(root) }
+    }
+
+    private fun hostingDirectoriesRoundTrip(destination: JSONObject, root: File) {
+        val tools = DirectoryTools(ApplicationProvider.getApplicationContext<Context>())
+        val files = mapOf(
+            "webeasy_templates/templates/page.html" to "<article>{{{content}}}</article>".toByteArray(),
+            "assets/site.css" to "body { color: blue }".toByteArray(),
+            "assets/site.js" to "console.log('site')".toByteArray(),
+            "assets/logo.svg" to "<svg/>".toByteArray(),
+        )
+        SitePublisher.withDirectory(destination, create = true) { directory ->
+            tools.exportCustomization(directory, files)
+            val loaded = tools.loadCustomization(directory, listOf("webeasy_templates/templates/page.html"))
+            assertEquals("<article>{{{content}}}</article>", loaded.sources.getString("webeasy_templates/templates/page.html"))
+            assertArrayEquals(files.getValue("assets/site.css"), loaded.assets.getValue("assets/site.css"))
+        }
+        root.resolve("private").mkdir()
+        val private = SitePublisher.privateBackupConnection(destination, "/private")
+        val snapshot = temporary.newFolder().apply {
+            resolve("webeasy.sqlite").writeText("saved database")
+            resolve("media").mkdir()
+            resolve("media/photo.bin").writeBytes(byteArrayOf(1, 2, 3, 4))
+        }
+        val now = Instant.parse("2026-11-27T12:00:00Z")
+        val old = SitePublisher.withDirectory(private) { tools.backup(it, snapshot, now.minusSeconds(15 * 86400L)) }
+        val modified = SitePublisher.withDirectory(private) { tools.backup(it, snapshot, now.minusSeconds(16 * 86400L)) }
+        root.resolve("private/${modified.directory.name}/unrelated.txt").writeText("keep")
+        val created = SitePublisher.withDirectory(private) { tools.backup(it, snapshot, now) }
+        assertFalse(root.resolve("private/${old.directory.name}").exists())
+        assertEquals("keep", root.resolve("private/${modified.directory.name}/unrelated.txt").readText())
+        val listed = SitePublisher.withDirectory(private) { tools.backups(it) }
+        assertEquals(2, listed.size)
+        val selected = listed.first { it.id == created.id }
+        SitePublisher.withDirectory(private) { directory ->
+            val current = selected.copy(directory = directory.findFile(selected.directory.name!!)!!)
+            val restored = tools.restoreSnapshot(current)
+            try {
+                assertEquals("saved database", restored.resolve("webeasy.sqlite").readText())
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4), restored.resolve("media/photo.bin").readBytes())
+            } finally { restored.deleteRecursively() }
+        }
+        assertEquals("Keep me", root.resolve("site/unrelated.txt").readText())
+    }
+
+    @Test
+    fun ftpCustomizationAndPrivateBackupsRoundTripWithConservativeRetention() {
+        val root = remote()
+        ftp(root) { port -> hostingDirectoriesRoundTrip(connection("ftp", port), root) }
+    }
+
+    @Test
+    fun backupsRejectWebsiteDirectoriesAndUnsafePaths() {
+        val destination = connection("ftp", 21).put("uploadSubfolder", "published")
+        for (path in listOf("/site", "/site/private", "/site/published", "/site/published/backups", "/", "private", "/site/../private")) {
+            try { SitePublisher.privateBackupConnection(destination, path); fail("Accepted unsafe backup directory") }
+            catch (_: IllegalArgumentException) {}
+        }
+        assertEquals("/private", SitePublisher.privateBackupConnection(destination, "/private").getString("directory"))
+        try {
+            SitePublisher.privateBackupConnection(connection("ftp", 21).put("directory", "site"), "/private")
+            fail("A relative website directory cannot establish private backup separation")
+        } catch (_: IllegalArgumentException) {}
     }
 
     @Test
@@ -154,6 +219,7 @@ class SitePublisherTest {
                 System.setProperty("javax.net.ssl.trustStorePassword", "test-only")
                 SitePublisher.publish(connection("ftps", port), site())
                 checkFiles(root)
+                hostingDirectoriesRoundTrip(connection("ftps", port), root)
                 val master = "webeasy_templates/templates/master.html"
                 root.resolve("site/$master").writeText("FTPS server edit{{{content}}}")
                 SitePublisher.publish(connection("ftps", port), site())
@@ -187,6 +253,7 @@ class SitePublisherTest {
             assertTrue(key.fingerprint.startsWith("SHA256:"))
             assertEquals(0, authentications.get())
             destination.put("_hostKeyFingerprint", key.fingerprint)
+            hostingDirectoriesRoundTrip(destination, root)
             SitePublisher.publish(destination, site())
             checkFiles(root)
             val master = "webeasy_templates/templates/master.html"

@@ -16,6 +16,18 @@ struct PublishingOperationTests {
                 preconditionFailure("Unsafe upload subfolder accepted.")
             } catch PublishingPaths.Invalid.subfolder {}
         }
+        let privateDirectory = try PublishingPaths.privateBackupDirectory("/private/", website: "/site/", subfolder: "published")
+        precondition(privateDirectory == "/private")
+        for path in ["/site", "/site/private", "/site/published/backups", "/", "private", "/site/../private"] {
+            do {
+                _ = try PublishingPaths.privateBackupDirectory(path, website: "/site", subfolder: "published")
+                preconditionFailure("Unsafe backup directory accepted.")
+            } catch {}
+        }
+        do {
+            _ = try PublishingPaths.privateBackupDirectory("/private", website: "site", subfolder: nil)
+            preconditionFailure("Relative website directory accepted for private backups.")
+        } catch {}
         let success = Progress(totalUnitCount: 1)
         let successClosed = DispatchSemaphore(value: 0)
         success.cancellationHandler = { successClosed.signal() }
