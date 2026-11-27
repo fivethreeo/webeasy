@@ -151,11 +151,15 @@ enum SitePublisher {
                     } catch { try? await sftp.close(); throw error }
                 } catch { try? await client.close(); throw error }
             }
-            let provider = try ftpProvider(destination)
+            // FilesProvider 0.26 applies its base path twice during directory listings.
+            // Keep that base at "/" and scope every operation explicitly instead.
+            var ftpRoot = destination
+            ftpRoot.directory = "/"
+            let provider = try ftpProvider(ftpRoot)
             let directory = HostingDirectory(identity: identity,
                 list: { path in
                     try await withCheckedThrowingContinuation { continuation in
-                        provider.contentsOfDirectory(path: path) { files, error in
+                        provider.contentsOfDirectory(path: remotePath(destination, path)) { files, error in
                             if let error { continuation.resume(throwing: error) }
                             else {
                                 continuation.resume(returning: files.map {
@@ -169,7 +173,7 @@ enum SitePublisher {
                 mkdir: { path in
                     let parts = path.split(separator: "/")
                     try await PublishingOperation.directory { done in
-                        provider.create(folder: String(parts.last!), at: parts.dropLast().joined(separator: "/"), completionHandler: done)
+                        provider.create(folder: String(parts.last!), at: remotePath(destination, parts.dropLast().joined(separator: "/")), completionHandler: done)
                     }
                 },
                 download: { path, local, maximum in
@@ -182,7 +186,7 @@ enum SitePublisher {
                     while true {
                         let length = count == maximum ? 1 : Int(min(1024 * 1024, maximum - count))
                         let bytes = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
-                            provider.contents(path: path, offset: count, length: length) { data, error in
+                            provider.contents(path: remotePath(destination, path), offset: count, length: length) { data, error in
                                 if let error { continuation.resume(throwing: error) }
                                 else if let data { continuation.resume(returning: data) }
                                 else { continuation.resume(throwing: ContentError.invalid("Cannot read hosting file.")) }
@@ -197,15 +201,18 @@ enum SitePublisher {
                     try output.synchronize()
                 },
                 upload: { local, path in
-                    try await operation { provider.copyItem(localFile: local, to: path, overwrite: true, completionHandler: $0) }
+                    try await operation { provider.copyItem(localFile: local, to: remotePath(destination, path), overwrite: true, completionHandler: $0) }
                 },
                 remove: { path, _ in
-                    try await operation { provider.removeItem(path: path, completionHandler: $0) }
+                    try await operation { provider.removeItem(path: remotePath(destination, path), completionHandler: $0) }
                 })
             return try await scoped(directory)
         } catch let approval as HostKeyApproval { throw approval }
         catch let error as ContentError { throw error }
-        catch { throw ContentError.invalid("Hosting directory operation failed. Check the destination, permissions, certificate or saved server key.") }
+        catch {
+            let detail = error as NSError
+            throw ContentError.invalid("Hosting directory operation failed (\(detail.domain), code \(detail.code)). Check the destination, permissions, certificate or saved server key.")
+        }
     }
 
     static func loadTemplates(_ destination: HostingDestination, paths: [String]) async throws -> [String: String] {
