@@ -88,9 +88,12 @@ def main():
         handler.masquerade_address = args.host
         handler.permit_foreign_addresses = False
         handler.permit_privileged_ports = False
+        # iOS FilesProvider pools several control connections while publishing.
+        # Leave room for that pool and expire abandoned idle sessions promptly.
+        handler.timeout = 60
         server = FTPServer((args.host, args.port), handler)
-        server.max_cons = 32
-        server.max_cons_per_ip = 4
+        server.max_cons = 64
+        server.max_cons_per_ip = 16
         print(f"Development FTP: {args.host}:{args.port}; root: {directory}", flush=True)
         print("Website destination: /public; private backup directory: /backups.", flush=True)
         print("Credentials are in the gitignored hosting.local.json; plain FTP is for trusted LAN testing only.",

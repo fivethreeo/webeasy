@@ -491,6 +491,9 @@ update their saved destination. Anyone on that LAN can view the credential QR. P
 clients are rejected using the socket address, not forwarded headers; same-origin
 and Host checks still apply. Plain FTP is only for trusted LAN testing; do not
 expose this development server to the internet.
+The development FTP server allows 16 control connections per client (64 total)
+to accommodate iOS connection pooling; idle control sessions expire after
+60 seconds. Files being actively transferred are not treated as idle.
 
 To test app-store uploads against this development FTP host, use the publisher's
 `--upload --allow-insecure-ftp --allow-http-development` flags and
