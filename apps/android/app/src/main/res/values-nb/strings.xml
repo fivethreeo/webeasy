@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Webeasy</string>
+    <string name="templates">Maler</string>
+    <string name="components">Byggeklosser</string>
+    <string name="back">Tilbake</string>
+    <string name="share_website">Lagre eller del nettside</string>
+    <string name="resources_unavailable">Nettsideressurser er ikke tilgjengelige</string>
+</resources>

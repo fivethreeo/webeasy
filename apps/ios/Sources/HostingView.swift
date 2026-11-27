@@ -111,7 +111,7 @@ struct HostingView: View {
                 Button("Publish website") { confirmingPublish = true }
                     .disabled(!model.ready || model.busy || settingsChanged || hostingServer == nil)
                 if model.busy { ProgressView() }
-                Text(model.status)
+                Text(ui(model.status))
                 Text("Credentials and trusted SFTP keys are kept in Keychain. FTPS validates the server certificate; SFTP requires a trusted server key.")
             }
             .navigationTitle("Hosting")

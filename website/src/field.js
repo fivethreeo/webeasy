@@ -1,6 +1,7 @@
 import "./field.css";
 import { figureDetails, richEditor, request } from "./editor.js";
 import { safeLinkHref } from "./rich-text.js";
+import { setUiLanguage } from "./ui-text.js";
 
 let value = "";
 let configuration = "";
@@ -17,6 +18,7 @@ window.WebeasyField = {
     if (html === value && configuration === serialized && document.querySelector(".rich-editor")) return;
     value = html;
     configuration = serialized;
+    if (options.language) setUiLanguage(options.language);
     const record = { id: "field", content: html };
     document.getElementById("field").replaceChildren(richEditor(record, "content", "Content", {
       project: { media: [] },

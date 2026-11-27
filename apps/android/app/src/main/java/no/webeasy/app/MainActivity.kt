@@ -266,13 +266,13 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 BackHandler(enabled = screens.isNotEmpty()) { back() }
                 if (pendingPublish) AlertDialog(onDismissRequest = { pendingPublish = false },
-                    title = { Text("Publish website?") },
-                    text = { Text("Save and upload the website to your saved hosting destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.") },
-                    confirmButton = { Button(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text("Publish") } },
-                    dismissButton = { OutlinedButton(onClick = { pendingPublish = false }) { Text("Cancel") } })
+                    title = { Text(ui("Publish website?")) },
+                    text = { Text(ui("Save and upload the website to your saved hosting destination. Matching files are replaced; unrelated files and old pages are kept. Plain FTP sends your password and content without encryption.")) },
+                    confirmButton = { Button(onClick = { pendingPublish = false; generate(true, publish = true) }) { Text(ui("Publish")) } },
+                    dismissButton = { OutlinedButton(onClick = { pendingPublish = false }) { Text(ui("Cancel")) } })
                 pendingHostKey?.let { key ->
-                    AlertDialog(onDismissRequest = { pendingHostKey = null; pendingHostingAction = null }, title = { Text("Trust SFTP server key?") },
-                        text = { Text("${key.host}:${key.port}\n${key.fingerprint}\nCompare this fingerprint with your server before trusting it. No password has been sent.") },
+                    AlertDialog(onDismissRequest = { pendingHostKey = null; pendingHostingAction = null }, title = { Text(ui("Trust SFTP server key?")) },
+                        text = { Text("${key.host}:${key.port}\n${key.fingerprint}\n" + ui("Compare this fingerprint with your server before trusting it. No password has been sent.")) },
                         confirmButton = { Button(onClick = {
                             runCatching {
                                 val connection = hosting.load() ?: error("Import hosting first.")
@@ -283,29 +283,29 @@ class MainActivity : ComponentActivity() {
                                 pendingHostingAction = null
                                 if (action != null) action() else if (hostKeyForTemplates) loadServerTemplates() else generate(true, publish = true)
                             }.onFailure { status = "Cannot save the trusted server key." }
-                        }) { Text(if (pendingHostingAction != null) "Trust and continue" else if (hostKeyForTemplates) "Trust and load" else "Trust and publish") } },
-                        dismissButton = { OutlinedButton(onClick = { pendingHostKey = null; pendingHostingAction = null }) { Text("Cancel") } })
+                        }) { Text(ui(if (pendingHostingAction != null) "Trust and continue" else if (hostKeyForTemplates) "Trust and load" else "Trust and publish")) } },
+                        dismissButton = { OutlinedButton(onClick = { pendingHostKey = null; pendingHostingAction = null }) { Text(ui("Cancel")) } })
                 }
                 pendingBack?.let { target ->
-                    AlertDialog(onDismissRequest = { pendingBack = null }, title = { Text("Save changes?") },
-                        text = { Text("Save changes before going back? Don't save discards changes to this item.") },
+                    AlertDialog(onDismissRequest = { pendingBack = null }, title = { Text(ui("Save changes?")) },
+                        text = { Text(ui("Save changes before going back? Don't save discards changes to this item.")) },
                         confirmButton = { Button(onClick = {
                             pendingBack = null
                             generate(false, afterSave = { if (screens.lastOrNull() === target) popScreen() })
-                        }, enabled = ready && !busy) { Text("Save") } },
+                        }, enabled = ready && !busy) { Text(ui("Save")) } },
                         dismissButton = { FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
                                 drafts.discard(target.record!!, project!!); changed(); status = "Changes discarded."
                                 pendingBack = null; popScreen()
-                            }) { Text("Don't save") }
-                            OutlinedButton(onClick = { pendingBack = null }) { Text("Cancel") }
+                            }) { Text(ui("Don't save")) }
+                            OutlinedButton(onClick = { pendingBack = null }) { Text(ui("Cancel")) }
                         } })
                 }
                 pendingRestore?.let { backup ->
-                    AlertDialog(onDismissRequest = { pendingRestore = null }, title = { Text("Restore this backup?") },
-                        text = { Text("This replaces the database, media, customizations and current unsaved edits. Hosting credentials are not changed.") },
-                        confirmButton = { Button(onClick = { pendingRestore = null; restoreBackup(backup) }, enabled = !busy) { Text("Restore") } },
-                        dismissButton = { OutlinedButton(onClick = { pendingRestore = null }) { Text("Cancel") } })
+                    AlertDialog(onDismissRequest = { pendingRestore = null }, title = { Text(ui("Restore this backup?")) },
+                        text = { Text(ui("This replaces the database, media, customizations and current unsaved edits. Hosting credentials are not changed.")) },
+                        confirmButton = { Button(onClick = { pendingRestore = null; restoreBackup(backup) }, enabled = !busy) { Text(ui("Restore")) } },
+                        dismissButton = { OutlinedButton(onClick = { pendingRestore = null }) { Text(ui("Cancel")) } })
                 }
                 val primaryNavigation = screens.isEmpty()
                 val tablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
@@ -314,23 +314,23 @@ class MainActivity : ComponentActivity() {
                         if (primaryNavigation && !tablet) PrimaryNavigation(rail = false, selectedTab = tab, onSelect = { tab = it })
                     }, topBar = {
                         TopAppBar(title = { Text(screens.lastOrNull()?.record?.optString("title")?.takeIf(String::isNotEmpty)
-                            ?: if (screens.lastOrNull()?.kind == "templates") "Templates" else "Webeasy",
+                            ?: if (screens.lastOrNull()?.kind == "templates") ui("Templates") else "Webeasy",
                             maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             navigationIcon = { if (screens.isNotEmpty()) OutlinedButton(onClick = ::back,
                                 contentPadding = PaddingValues(horizontal = 12.dp)) { Text(getString(R.string.back)) } },
                             actions = {
                                 Button(onClick = { generate(false) }, enabled = ready && !busy && project != null,
-                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Save") }
+                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text(ui("Save")) }
                                 Spacer(Modifier.width(8.dp))
                                 OutlinedButton(onClick = { generate(true, export = true) }, enabled = ready && !busy && project != null,
-                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Export") }
+                                    contentPadding = PaddingValues(horizontal = 12.dp)) { Text(ui("Export")) }
                             })
                     }) { padding ->
                         Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                             if (primaryNavigation && tablet) PrimaryNavigation(rail = true, selectedTab = tab, onSelect = { tab = it })
                             Column(Modifier.weight(1f).fillMaxHeight()) {
                                 val screen = screens.lastOrNull()
-                                if (screen?.contentKey == null) Text(status, Modifier.padding(16.dp))
+                                if (screen?.contentKey == null) Text(ui(status), Modifier.padding(16.dp))
                                 when {
                                     screen?.url != null -> key(screen.url, screen.directory) { Preview(screen) }
                                     screen?.contentKey != null -> key(screen.record!!.getString("id"), screen.contentKey) {
@@ -448,22 +448,22 @@ class MainActivity : ComponentActivity() {
                     MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
                     modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(if (hostingServer != null) "Hosting configured" else "No hosting added",
+                        Text(ui(if (hostingServer != null) "Hosting configured" else "No hosting added"),
                             style = MaterialTheme.typography.headlineSmall)
                         hostingServer?.let { server ->
                             Text(server)
                             Text("Destination: $hostingDirectory")
-                            Text("Saved securely on this device. The connection is checked when you publish.")
-                        } ?: Text("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded.")
-                        if (hostingStatus.isNotEmpty()) Text(hostingStatus)
+                            Text(ui("Saved securely on this device. The connection is checked when you publish."))
+                        } ?: Text(ui("Import your hosting setup QR. Pictures are decoded on this phone, not uploaded."))
+                        if (hostingStatus.isNotEmpty()) Text(ui(hostingStatus))
                     }
                 }
-                Text(if (hostingServer == null) "Add hosting" else "Replace hosting", style = MaterialTheme.typography.titleMedium)
+                Text(ui(if (hostingServer == null) "Add hosting" else "Replace hosting"), style = MaterialTheme.typography.titleMedium)
                 Button(onClick = { qrPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, enabled = !busy) {
-                    Text("Read QR from picture")
+                    Text(ui("Read QR from picture"))
                 }
                 Button(onClick = ::photographQR, enabled = !busy) {
-                    Text("Take a QR picture")
+                    Text(ui("Take a QR picture"))
                 }
                 OutlinedButton(onClick = {
                     worker.execute {
@@ -474,23 +474,23 @@ class MainActivity : ComponentActivity() {
                             } },
                             onFailure = { runOnUiThread { hostingStatus = "Cannot remove hosting credentials." } })
                     }
-                }, enabled = !busy && hostingServer != null) { Text("Forget hosting") }
+                }, enabled = !busy && hostingServer != null) { Text(ui("Forget hosting")) }
                 if (advancedUI) OutlinedTextField(value = publicPathPrefix, onValueChange = { publicPathPrefix = it },
-                    label = { Text("Public URL prefix (optional)") }, singleLine = true, enabled = !busy && hostingServer != null,
+                    label = { Text(ui("Public URL prefix (optional)")) }, singleLine = true, enabled = !busy && hostingServer != null,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = uploadSubfolder, onValueChange = { uploadSubfolder = it },
-                    label = { Text("Upload subfolder (optional)") }, singleLine = true, enabled = !busy && hostingServer != null,
+                    label = { Text(ui("Upload subfolder (optional)")) }, singleLine = true, enabled = !busy && hostingServer != null,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth())
-                Text("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links.")
+                Text(ui("Use / for a website at the domain root, or /site/ for a website under that path. The upload subfolder is relative to the QR's destination; leave it blank to publish directly there. A blank public prefix uses relative website links."))
                 Button(onClick = ::savePublishingSettings, enabled = ready && !busy && hostingServer != null && publishingSettingsChanged()) {
-                    Text("Save publishing settings")
+                    Text(ui("Save publishing settings"))
                 }
-                if (publishingSettingsChanged()) Text("Save publishing settings before publishing.")
-                Button(onClick = { pendingPublish = true }, enabled = ready && !busy && hostingServer != null && !publishingSettingsChanged()) { Text("Publish website") }
+                if (publishingSettingsChanged()) Text(ui("Save publishing settings before publishing."))
+                Button(onClick = { pendingPublish = true }, enabled = ready && !busy && hostingServer != null && !publishingSettingsChanged()) { Text(ui("Publish website")) }
                 if (busy) CircularProgressIndicator()
-                Text("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key.")
+                Text(ui("Credentials and trusted SFTP keys are encrypted with Android Keystore. FTPS validates the server certificate; SFTP requires a trusted server key."))
             }
             return
         }
@@ -501,7 +501,7 @@ class MainActivity : ComponentActivity() {
         val key = if (tab == 0) "pages" else "news"
         val records = project?.optJSONArray(key)?.records() ?: emptyList()
         LazyColumn {
-            if (tab == 1) item { OutlinedButton(onClick = { generate(true, path = "news/index.html") }) { Text("Latest three news items") } }
+            if (tab == 1) item { OutlinedButton(onClick = { generate(true, path = "news/index.html") }) { Text(ui("Latest three news items")) } }
             items(records.size, key = { records[it].getString("id") }) { index ->
                 RowEntry(records[index], project!!.getJSONArray(key), index, if (tab == 0) "page" else "news")
             }
@@ -510,7 +510,7 @@ class MainActivity : ComponentActivity() {
                     val kind = if (tab == 0) "page" else "news"
                     val collection = project!!.getJSONArray(key)
                     val record = create(kind, collection); collection.put(record); changed(); screens.add(Screen(kind, record))
-                }) { Text(if (tab == 0) "Add page" else "Add news") }
+                }) { Text(ui(if (tab == 0) "Add page" else "Add news")) }
             }
         }
     }
@@ -518,20 +518,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Settings() {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Editor mode", style = MaterialTheme.typography.titleMedium)
+            Text(ui("Editor mode"), style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((advanced, name) in listOf(false to "Simple", true to "Advanced")) {
                     FilterChip(selected = advancedUI == advanced, enabled = !busy, onClick = {
                         advancedUI = advanced
                         getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putBoolean("advanced", advanced).apply()
-                    }, label = { Text(name) })
+                    }, label = { Text(ui(name)) })
                 }
             }
-            Text("Simple hides sections, covers, template loading, and the public URL prefix. Advanced shows all options.")
-            OutlinedButton(onClick = { screens.add(Screen("templates")) }, enabled = ready && !busy) { Text("Templates") }
+            Text(ui("Simple hides sections, covers, template loading, and the public URL prefix. Advanced shows all options."))
+            OutlinedButton(onClick = { screens.add(Screen("templates")) }, enabled = ready && !busy) { Text(ui("Templates")) }
             if (advancedUI) {
-                OutlinedButton(onClick = { screens.add(Screen("customization")) }, enabled = ready && !busy) { Text("Export / load templates and assets") }
-                OutlinedButton(onClick = { screens.add(Screen("backups")); refreshBackups() }, enabled = ready && !busy) { Text("Backups") }
+                OutlinedButton(onClick = { screens.add(Screen("customization")) }, enabled = ready && !busy) { Text(ui("Export / load templates and assets")) }
+                OutlinedButton(onClick = { screens.add(Screen("backups")); refreshBackups() }, enabled = ready && !busy) { Text(ui("Backups")) }
             }
         }
     }
@@ -558,16 +558,16 @@ class MainActivity : ComponentActivity() {
     private fun Customizations() {
         if (!advancedUI) return
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Templates and website assets", style = MaterialTheme.typography.titleLarge)
-            Text("Export to the configured hosting destination, edit its webeasy_templates and assets folders, then load them back. Loading replaces the current customization as a complete batch.")
+            Text(ui("Templates and website assets"), style = MaterialTheme.typography.titleLarge)
+            Text(ui("Export to the configured hosting destination, edit its webeasy_templates and assets folders, then load them back. Loading replaces the current customization as a complete batch."))
             Text("Hosting directory: $hostingDirectory${if (uploadSubfolder.isNotEmpty()) "/$uploadSubfolder" else ""}")
             OutlinedButton(onClick = ::exportCustomization, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
-                Text("Export templates and assets to hosting")
+                Text(ui("Export templates and assets to hosting"))
             }
             OutlinedButton(onClick = ::loadCustomization, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
-                Text("Load templates and assets from hosting")
+                Text(ui("Load templates and assets from hosting"))
             }
-            Text("Website CSS, JavaScript, images and fonts can be customized. Native editor resources stay protected. Files are exported only when requested; normal publishing does not write template-source copies.")
+            Text(ui("Website CSS, JavaScript, images and fonts can be customized. Native editor resources stay protected. Files are exported only when requested; normal publishing does not write template-source copies."))
             if (busy) CircularProgressIndicator()
         }
     }
@@ -626,16 +626,16 @@ class MainActivity : ComponentActivity() {
         if (!advancedUI) return
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Text("Database and media backups", style = MaterialTheme.typography.titleLarge)
-                Text("Backups contain saved SQLite content, customizations and stored media, not hosting credentials. Save current edits first. Each backup gets a UTC datetime directory.")
-                Text("Backups use the same hosting connection, in an existing private server directory outside the public website folder. The app cannot verify your web server's access rules.")
+                Text(ui("Database and media backups"), style = MaterialTheme.typography.titleLarge)
+                Text(ui("Backups contain saved SQLite content, customizations and stored media, not hosting credentials. Save current edits first. Each backup gets a UTC datetime directory."))
+                Text(ui("Backups use the same hosting connection, in an existing private server directory outside the public website folder. The app cannot verify your web server's access rules."))
                 OutlinedTextField(value = backupDirectory, onValueChange = {
                     backupDirectory = it; backups = emptyList(); pendingRestore = null; pendingHostingAction = null
                     getSharedPreferences("editor-ui", MODE_PRIVATE).edit().putString("hosting-backup-directory", it).apply()
-                }, label = { Text("Private server backup directory") }, singleLine = true, enabled = !busy)
-                OutlinedButton(onClick = ::createBackup, enabled = ready && !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text("Back up database and media to hosting") }
-                OutlinedButton(onClick = ::refreshBackups, enabled = !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text("Refresh hosting backups") }
-                Text("After a successful backup, completed app-created backups older than 14 days are removed. Unrelated files and directories are kept.")
+                }, label = { Text(ui("Private server backup directory")) }, singleLine = true, enabled = !busy)
+                OutlinedButton(onClick = ::createBackup, enabled = ready && !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text(ui("Back up database and media to hosting")) }
+                OutlinedButton(onClick = ::refreshBackups, enabled = !busy && backupDirectory.isNotBlank() && hostingServer != null && !publishingSettingsChanged()) { Text(ui("Refresh hosting backups")) }
+                Text(ui("After a successful backup, completed app-created backups older than 14 days are removed. Unrelated files and directories are kept."))
                 if (busy) CircularProgressIndicator()
             }
             items(backups.size, key = { backups[it].directory.uri.toString() }) { index ->
@@ -643,7 +643,7 @@ class MainActivity : ComponentActivity() {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(backup.createdAt.toString(), style = MaterialTheme.typography.titleMedium)
                     Text("${backup.files.length()} files")
-                    OutlinedButton(onClick = { pendingRestore = backup }, enabled = !busy) { Text("Restore backup") }
+                    OutlinedButton(onClick = { pendingRestore = backup }, enabled = !busy) { Text(ui("Restore backup")) }
                 }
             }
         }
@@ -706,9 +706,9 @@ class MainActivity : ComponentActivity() {
             if (advancedUI) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
-                        Text("Load templates from server")
+                        Text(ui("Load templates from server"))
                     }
-                    Text("Export templates and assets explicitly to hosting from Advanced settings, then load the edited HTML here.")
+                    Text(ui("Export templates and assets explicitly to hosting from Advanced settings, then load the edited HTML here."))
                     if (busy) CircularProgressIndicator()
                 }
             }
@@ -720,7 +720,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             OutlinedButton(onClick = {
                 previewTemplate(record.getString("id"))
-            }, enabled = ready && !busy) { Text("Preview template") }
+            }, enabled = ready && !busy) { Text(ui("Preview template")) }
             SelectionContainer(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Text(record.getString("source"), fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth())
             }
@@ -852,36 +852,36 @@ class MainActivity : ComponentActivity() {
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Text("Show changes", style = MaterialTheme.typography.headlineSmall)
+                Text(ui("Show changes"), style = MaterialTheme.typography.headlineSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = !published, onClick = { published = false }, label = { Text("Unsaved") })
-                    FilterChip(selected = published, onClick = { published = true }, label = { Text("Unpublished") })
+                    FilterChip(selected = !published, onClick = { published = false }, label = { Text(ui("Unsaved")) })
+                    FilterChip(selected = published, onClick = { published = true }, label = { Text(ui("Unpublished")) })
                 }
-                Text(if (published)
+                Text(ui(if (published)
                     "Current content compared with the last successful publish recorded on this device. This does not inspect the server."
-                else "Current content compared with the last local save.")
-                Text("Content changes only; hosting settings are not included.")
+                else "Current content compared with the last local save."))
+                Text(ui("Content changes only; hosting settings are not included."))
                 if (loading) CircularProgressIndicator()
-                if (message.isNotEmpty()) Text(message)
+                if (message.isNotEmpty()) Text(ui(message))
             }
             items(changes.length(), key = { changes.getJSONObject(it).getString("id") }) { index ->
                 val change = changes.getJSONObject(index)
                 val isPageOrNews = change.optString("kind") in listOf("Page", "News")
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(change.getString("title"), style = MaterialTheme.typography.titleLarge)
-                    Text(change.getString("status"), style = MaterialTheme.typography.titleMedium)
+                    Text(ui(change.getString("status")), style = MaterialTheme.typography.titleMedium)
                     if (isPageOrNews) {
                         SelectionContainer { Text("ID: ${change.getString("id")}", fontFamily = FontFamily.Monospace) }
                     }
                     change.getJSONArray("fields").records().forEach { field ->
-                        Text(field.getString("name"), style = MaterialTheme.typography.titleMedium)
+                        Text(ui(field.getString("name")), style = MaterialTheme.typography.titleMedium)
                         if (isPageOrNews && change.getString("status") != "Changed") {
                             val value = field.getString(if (change.getString("status") == "Added") "after" else "before")
                             SelectionContainer { Text(value.ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
                         } else {
-                            Text("Before")
+                            Text(ui("Before"))
                             SelectionContainer { Text(field.getString("before").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
-                            Text("After")
+                            Text(ui("After"))
                             SelectionContainer { Text(field.getString("after").ifEmpty { "(empty)" }, fontFamily = FontFamily.Monospace) }
                         }
                     }
@@ -900,13 +900,13 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.clickable { screens.add(Screen(kind, record)) })
             FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { collection.remove(index); changed() }) { Text("Remove") }
+                OutlinedButton(onClick = { collection.remove(index); changed() }) { Text(ui("Remove")) }
                 OutlinedButton(onClick = {
                     if (index > 0) {
                         val previous = collection.getJSONObject(index - 1)
                         collection.put(index - 1, record); collection.put(index, previous); changed()
                     }
-                }, enabled = index > 0) { Text("Move up") }
+                }, enabled = index > 0) { Text(ui("Move up")) }
             }
         }
     }
@@ -932,7 +932,7 @@ class MainActivity : ComponentActivity() {
                     item {
                         val current = project!!.optString("homePageId") == record.getString("id")
                         OutlinedButton(onClick = { project!!.put("homePageId", record.getString("id")); changed() }, enabled = !current) {
-                            Text(if (current) "Current homepage" else "Use as homepage")
+                            Text(ui(if (current) "Current homepage" else "Use as homepage"))
                         }
                     }
                 }
@@ -942,31 +942,31 @@ class MainActivity : ComponentActivity() {
             if (screen.kind == "section") item { NativeText(record, "subheading", "Subheading (optional)") }
             if (advancedUI && screen.kind in listOf("page", "news")) item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Cover image (optional)", style = MaterialTheme.typography.titleMedium)
+                    Text(ui("Cover image (optional)"), style = MaterialTheme.typography.titleMedium)
                     val coverId = record.optString("coverMediaId")
                     val media = project?.getJSONArray("media")?.records()?.find { it.getString("id") == coverId }
                     if (media != null) Text(media.getString("filename"))
                     OutlinedButton(onClick = { pendingMediaDetails = PendingMediaDetails("cover", "image", null, record) }, enabled = !busy) {
-                        Text(if (coverId.isEmpty()) "Add cover image" else "Replace cover image")
+                        Text(ui(if (coverId.isEmpty()) "Add cover image" else "Replace cover image"))
                     }
                     if (coverId.isNotEmpty()) {
                         NativeText(record, "coverAlt", "Cover alternative text")
                         OutlinedButton(onClick = { record.put("coverMediaId", "").put("coverAlt", ""); changed() }, enabled = !busy) {
-                            Text("Remove cover image")
+                            Text(ui("Remove cover image"))
                         }
                     }
-                    Text("Covers must be at least 1200 pixels wide. Optional resizing and JPEG quality are available.")
+                    Text(ui("Covers must be at least 1200 pixels wide. Optional resizing and JPEG quality are available."))
                 }
             }
             item {
-                Text(if (screen.kind == "news") "Short content" else "Content")
+                Text(ui(if (screen.kind == "news") "Short content" else "Content"))
                 OutlinedButton(onClick = {
                     screens.add(Screen("content", record, contentKey = if (screen.kind == "news") "shortContent" else "content"))
-                }) { Text(if (screen.kind == "news") "Edit short content" else "Edit content") }
+                }) { Text(ui(if (screen.kind == "news") "Edit short content" else "Edit content")) }
             }
             if (screen.kind == "news") item {
-                Text("Long content")
-                OutlinedButton(onClick = { screens.add(Screen("content", record, contentKey = "content")) }) { Text("Edit long content") }
+                Text(ui("Long content"))
+                OutlinedButton(onClick = { screens.add(Screen("content", record, contentKey = "content")) }) { Text(ui("Edit long content")) }
             }
             val related = buildList {
                 if (advancedUI && screen.kind in listOf("page", "news")) add(Triple("sections", "Sections", "section"))
@@ -974,7 +974,7 @@ class MainActivity : ComponentActivity() {
                 if (screen.kind == "page") add(Triple("children", "Subpages", "page"))
             }
             related.forEach { (key, label, kind) ->
-                item { Text(label, style = MaterialTheme.typography.titleMedium) }
+                item { Text(ui(label), style = MaterialTheme.typography.titleMedium) }
                 val collection = array(record, key)
                 items(collection.length(), key = { "$key-${collection.getJSONObject(it).getString("id")}" }) { index ->
                     RowEntry(collection.getJSONObject(index), collection, index, kind)
@@ -985,18 +985,18 @@ class MainActivity : ComponentActivity() {
             }
             if (screen.kind in listOf("page", "news")) item {
                 OutlinedButton(onClick = { generate(true, path = if (screen.kind == "news")
-                    "news/${record.getString("date")}/${record.getString("slug")}/index.html" else pagePath(record.getString("id"))) }) { Text("Preview") }
+                    "news/${record.getString("date")}/${record.getString("slug")}/index.html" else pagePath(record.getString("id"))) }) { Text(ui("Preview")) }
             }
         }
         if (layoutDialog) {
-            AlertDialog(onDismissRequest = { layoutDialog = false }, title = { Text("Page layout") },
+            AlertDialog(onDismissRequest = { layoutDialog = false }, title = { Text(ui("Page layout")) },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { layouts.forEach { layout ->
                     OutlinedButton(onClick = { record.put("templateId", layout.getString("id")); changed(); layoutDialog = false },
                         modifier = Modifier.fillMaxWidth()) {
-                        Text(layout.getString("title"))
+                        Text(ui(layout.getString("title")))
                     }
                 } } },
-                confirmButton = { OutlinedButton(onClick = { layoutDialog = false }) { Text("Cancel") } })
+                confirmButton = { OutlinedButton(onClick = { layoutDialog = false }) { Text(ui("Cancel")) } })
         }
         if (dateDialog) {
             val dateState = rememberDatePickerState(initialSelectedDateMillis = LocalDate.parse(record.getString("date")).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
@@ -1004,8 +1004,8 @@ class MainActivity : ComponentActivity() {
                 confirmButton = { Button(onClick = {
                     dateState.selectedDateMillis?.let { record.put("date", Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString()); changed() }
                     dateDialog = false
-                }) { Text("Select") } },
-                dismissButton = { OutlinedButton(onClick = { dateDialog = false }) { Text("Cancel") } }) { DatePicker(state = dateState) }
+                }) { Text(ui("Select")) } },
+                dismissButton = { OutlinedButton(onClick = { dateDialog = false }) { Text(ui("Cancel")) } }) { DatePicker(state = dateState) }
         }
     }
 
@@ -1116,7 +1116,7 @@ class MainActivity : ComponentActivity() {
         var value = ""
         fun pushValue(content: String) {
             value = content
-            val options = JSONObject().put("paragraphsOnly", key == "shortContent").put("simple", !advancedUI)
+            val options = JSONObject().put("paragraphsOnly", key == "shortContent").put("simple", !advancedUI).put("language", resources.configuration.locales[0].toLanguageTag())
             view.evaluateJavascript("window.WebeasyField.setValue(${JSONObject.quote(content)}, $options);", null)
         }
         @JavascriptInterface fun request(serialized: String) {
@@ -1179,9 +1179,9 @@ class MainActivity : ComponentActivity() {
         BackHandler { finish() }
         Surface(Modifier.fillMaxSize()) {
             Scaffold(topBar = {
-                TopAppBar(title = { Text(if (pending.coverRecord != null) "Cover image" else if (pending.kind == "image") "Image details" else "Video details",
+                TopAppBar(title = { Text(ui(if (pending.coverRecord != null) "Cover image" else if (pending.kind == "image") "Image details" else "Video details"),
                     maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    navigationIcon = { OutlinedButton(onClick = { finish() }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text("Cancel") } },
+                    navigationIcon = { OutlinedButton(onClick = { finish() }, contentPadding = PaddingValues(horizontal = 12.dp)) { Text(ui("Cancel")) } },
                     actions = { Button(contentPadding = PaddingValues(horizontal = 12.dp), onClick = {
                         val name = basename.trim()
                         if (name.isNotEmpty() && !name.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,79}"))) {
@@ -1201,28 +1201,28 @@ class MainActivity : ComponentActivity() {
                                 finish(JSONObject().put("basename", name).put("alt", alt).put("caption", caption).put("imageOptions", options))
                             }
                         }
-                    }) { Text("Choose file") } })
+                    }) { Text(ui("Choose file")) } })
             }) { padding ->
                 Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedTextField(basename, { basename = it }, Modifier.fillMaxWidth(), label = { Text("File basename (optional)") }, singleLine = true)
-                    Text("Leave blank for an automatic name. Use letters, numbers, hyphens, or underscores, without an extension. Duplicate names get a number.")
+                    OutlinedTextField(basename, { basename = it }, Modifier.fillMaxWidth(), label = { Text(ui("File basename (optional)")) }, singleLine = true)
+                    Text(ui("Leave blank for an automatic name. Use letters, numbers, hyphens, or underscores, without an extension. Duplicate names get a number."))
                     if (pending.kind == "image") {
-                        OutlinedTextField(alt, { alt = it }, Modifier.fillMaxWidth(), label = { Text("Alternative text") })
+                        OutlinedTextField(alt, { alt = it }, Modifier.fillMaxWidth(), label = { Text(ui("Alternative text")) })
                     }
-                    if (pending.coverRecord == null) OutlinedTextField(caption, { caption = it }, Modifier.fillMaxWidth(), label = { Text("Caption (optional)") })
+                    if (pending.coverRecord == null) OutlinedTextField(caption, { caption = it }, Modifier.fillMaxWidth(), label = { Text(ui("Caption (optional)")) })
                     if (pending.kind == "image") {
-                        Text("Image optimization (optional)", style = MaterialTheme.typography.titleMedium)
+                        Text(ui("Image optimization (optional)"), style = MaterialTheme.typography.titleMedium)
                         ImagePreset("Common image widths", width, listOf("320", "400", "640", "960", "1280", "1600", "1920", "2560")
                             .filter { pending.coverRecord == null || it.toInt() >= 1200 }, " px") { width = it }
-                        OutlinedTextField(width, { width = it }, Modifier.fillMaxWidth(), label = { Text("Maximum width (pixels, optional)") },
+                        OutlinedTextField(width, { width = it }, Modifier.fillMaxWidth(), label = { Text(ui("Maximum width (pixels, optional)")) },
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                         ImagePreset("Common JPEG qualities", quality, listOf("60", "70", "75", "80", "85", "90", "95", "100"), "%") { quality = it }
-                        OutlinedTextField(quality, { quality = it }, Modifier.fillMaxWidth(), label = { Text("JPEG quality (%, optional)") },
+                        OutlinedTextField(quality, { quality = it }, Modifier.fillMaxWidth(), label = { Text(ui("JPEG quality (%, optional)")) },
                             singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                        Text("Leave both blank for normal import. Width preserves proportions and never enlarges images. Resized JPEG uses 85% quality unless specified. PNG remains lossless and keeps transparency. Animated images must be imported unchanged.")
-                    } else Text("MP4 is recommended for videos.")
-                    if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+                        Text(ui("Leave both blank for normal import. Width preserves proportions and never enlarges images. Resized JPEG uses 85% quality unless specified. PNG remains lossless and keeps transparency. Animated images must be imported unchanged."))
+                    } else Text(ui("MP4 is recommended for videos."))
+                    if (error.isNotEmpty()) Text(ui(error), color = MaterialTheme.colorScheme.error)
                 }
             }
         }
@@ -1233,12 +1233,12 @@ class MainActivity : ComponentActivity() {
     private fun ImagePreset(label: String, value: String, choices: List<String>, unit: String, onChange: (String) -> Unit) {
         var expanded by remember { mutableStateOf(false) }
         ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-            OutlinedTextField(value = if (value.isEmpty()) "None" else value + unit,
-                onValueChange = {}, readOnly = true, label = { Text(label) },
+            OutlinedTextField(value = if (value.isEmpty()) ui("None") else value + unit,
+                onValueChange = {}, readOnly = true, label = { Text(ui(label)) },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                 modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth())
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(text = { Text("None") }, onClick = { onChange(""); expanded = false })
+                DropdownMenuItem(text = { Text(ui("None")) }, onClick = { onChange(""); expanded = false })
                 choices.forEach { choice ->
                     DropdownMenuItem(text = { Text(choice + unit) }, onClick = { onChange(choice); expanded = false })
                 }

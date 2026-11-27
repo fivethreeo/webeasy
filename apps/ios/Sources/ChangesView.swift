@@ -33,34 +33,34 @@ struct ChangesView: View {
                         Text("Unpublished").tag(true)
                     }
                     .pickerStyle(.segmented)
-                    Text(published
+                    Text(ui(published
                          ? "Current content compared with the last successful publish recorded on this device. This does not inspect the server."
-                         : "Current content compared with the last local save.")
+                         : "Current content compared with the last local save."))
                     Text("Content changes only; hosting settings are not included.")
                         .foregroundStyle(.secondary)
                     if loading { ProgressView() }
-                    if !message.isEmpty { Text(message) }
+                    if !message.isEmpty { Text(ui(message)) }
                 }
                 ForEach(changes) { change in
                     Section {
-                        Text(change.status).font(.headline)
+                        Text(ui(change.status)).font(.headline)
                         if change.isPageOrNews {
                             Text("ID: \(change.id)")
                                 .font(.body.monospaced()).textSelection(.enabled)
                         }
                         ForEach(change.fields, id: \.name) { field in
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(field.name).font(.headline)
+                                Text(ui(field.name)).font(.headline)
                                 if change.isPageOrNews && change.status != "Changed" {
                                     let value = change.status == "Added" ? field.after : field.before
-                                    Text(value.isEmpty ? "(empty)" : value)
+                                    Text(value.isEmpty ? ui("(empty)") : value)
                                         .font(.body.monospaced()).textSelection(.enabled)
                                 } else {
                                     Text("Before").foregroundStyle(.secondary)
-                                    Text(field.before.isEmpty ? "(empty)" : field.before)
+                                    Text(field.before.isEmpty ? ui("(empty)") : field.before)
                                         .font(.body.monospaced()).textSelection(.enabled)
                                     Text("After").foregroundStyle(.secondary)
-                                    Text(field.after.isEmpty ? "(empty)" : field.after)
+                                    Text(field.after.isEmpty ? ui("(empty)") : field.after)
                                         .font(.body.monospaced()).textSelection(.enabled)
                                 }
                             }

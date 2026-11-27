@@ -392,7 +392,7 @@ test("main menu lists top-level pages and marks their active ancestor on nested 
   assert.equal(dom(files.find((file) => file.path === "news/index.html").html).querySelector(".site-menu a.active").getAttribute("href"), "news/");
 });
 
-test("subpage navigation is an aside shared by its parent and descendants, not by standalone pages", () => {
+test("secondary navigation is a navigation landmark outside asides, shared by its parent and descendants", () => {
   const project = normalize(input);
   const root = project.pages[0];
   const child = root.children[0];
@@ -406,8 +406,10 @@ test("subpage navigation is an aside shared by its parent and descendants, not b
   const files = renderSite(normalize(project), catalog);
   for (const path of ["index.html", "about/index.html", "about/team/index.html", "about/team/deep/index.html"]) {
     const page = dom(files.find((file) => file.path === path).html);
-    const nav = page.querySelector('aside nav[aria-label="Subpages"]');
+    const nav = page.querySelector('nav.subpage-navigation[aria-label="Navigation"]');
     assert.ok(nav, path);
+    assert.equal(nav.closest("aside"), null);
+    assert.equal(nav.querySelector("h2").textContent, "Navigation");
     assert.deepEqual([...nav.querySelectorAll("a")].map((link) => link.getAttribute("href")), ["about/team/deep/"]);
     const current = nav.querySelector('[aria-current="page"]');
     assert.equal(current?.getAttribute("href") ?? null,

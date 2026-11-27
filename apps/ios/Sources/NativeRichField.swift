@@ -40,7 +40,8 @@ struct NativeRichField: UIViewRepresentable {
         var value = ""
         var configuration = ""
         var settings: String {
-            let options = ["paragraphsOnly": parent.paragraphsOnly, "simple": !parent.model.advancedUI]
+            let options: [String: Any] = ["paragraphsOnly": parent.paragraphsOnly, "simple": !parent.model.advancedUI,
+                                         "language": Bundle.main.preferredLocalizations.first ?? "en"]
             let data = (try? JSONSerialization.data(withJSONObject: options, options: .sortedKeys)) ?? Data("{}".utf8)
             return String(decoding: data, as: UTF8.self)
         }
@@ -189,9 +190,9 @@ struct NativeRichField: UIViewRepresentable {
                         } else {
                             Section { Text("MP4 is recommended for videos.") }
                         }
-                        if !error.isEmpty { Section { Text(error).foregroundStyle(.red) } }
+                        if !error.isEmpty { Section { Text(ui(error)).foregroundStyle(.red) } }
                     }
-                    .navigationTitle(cover ? "Cover image" : kind == "image" ? "Image details" : "Video details")
+                    .navigationTitle(ui(cover ? "Cover image" : kind == "image" ? "Image details" : "Video details"))
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { completion(nil) } }

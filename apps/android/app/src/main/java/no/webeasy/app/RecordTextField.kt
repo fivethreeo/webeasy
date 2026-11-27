@@ -14,6 +14,6 @@ import org.json.JSONObject
 internal fun RecordTextField(record: JSONObject, key: String, label: String, revision: Int, onChange: (String) -> Unit) {
     val value = remember(record, key, revision) { record.optString(key) }
     OutlinedTextField(value = value, onValueChange = onChange,
-        label = { Text(label) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        label = { Text(ui(label)) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(capitalization = if (key == "slug") KeyboardCapitalization.None else KeyboardCapitalization.Sentences))
 }

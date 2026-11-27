@@ -18,6 +18,11 @@ Advanced customization and backups use the configured hosting connection directl
 not a device-local folder picker. Direct Dropbox integration is not implemented.
 
 **Settings** contains the Simple/Advanced mode selector and **Templates**.
+The native apps and rich-text controls support English and Norwegian Bokmål,
+following the device/app language with English fallback. Android also advertises
+both choices in the system's per-app language settings. Interface translations
+come from `shared/ui-nb.json`; `npm run package:website` generates native resources.
+Project content and customized templates are never automatically translated.
 Links use a native full-screen form like image details, with page selection,
 URL and text fields, and Remove link inside the edit view.
 Android uses a native bottom navigation bar on phones and a left navigation rail

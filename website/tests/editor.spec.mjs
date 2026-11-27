@@ -120,8 +120,8 @@ test("homepage choice persists, hides its submenu link and reflows at enlarged t
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__savedProject.homePageId)).toBe(project.pages[0].children[0].id);
   await page.getByRole("button", { name: "Preview", exact: true }).click();
-  const aside = page.locator("#preview aside.subpage-navigation");
-  await expect(aside).toHaveCount(0);
+  const navigation = page.locator("#preview nav.subpage-navigation");
+  await expect(navigation).toHaveCount(0);
   await expect(page.locator("#preview .site-menu a.active")).toHaveAttribute("href", "about/");
   for (const size of ["125%", "250%"]) {
     await page.locator("html").evaluate((element, size) => { element.style.fontSize = size; }, size);
@@ -157,6 +157,17 @@ async function openField(page, content = "<p>Hello from the phone</p>", nativeDe
   await page.route("**/media/native-test.mp4", (route) => route.fulfill({ contentType: "video/mp4", body: clip }));
   await page.goto("/field.html");
 }
+
+test("native content field supports Bokmål controls and keeps English available without translating content", async ({ page }) => {
+  await openField(page, "<p>Pages</p>", null, { language: "nb-NO" });
+  const field = page.getByRole("textbox", { name: "Innhold", exact: true });
+  await expect(field).toHaveText("Pages");
+  await expect(page.getByRole("button", { name: "Fet", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Avsnitt eller overskrift" })).toBeVisible();
+  await page.evaluate(() => window.WebeasyField.setValue("<p>Pages</p>", { language: "en" }));
+  await expect(page.getByRole("textbox", { name: "Content", exact: true })).toHaveText("Pages");
+  await expect(page.getByRole("button", { name: "Bold", exact: true })).toBeVisible();
+});
 
 test("native homepage links show the logical root when editing an old index link", async ({ page }) => {
   await openField(page, '<p><a href="index.html"><em>Home</em></a></p>', { linkDetails: true });

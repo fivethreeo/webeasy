@@ -2,6 +2,9 @@ import "./editor.css";
 import { createRichTextSanitizer, safeLinkHref, wrapInlineParagraphs } from "./rich-text.js";
 import { newId, normalizeProject, pageRoutes, sortedNews, renderSite, referencedMedia } from "./content-model.js";
 import { editorIcon } from "./editor-icons.js";
+import { setUiLanguage, uiText as t } from "./ui-text.js";
+
+setUiLanguage(navigator.language);
 
 const sanitize = createRichTextSanitizer(window);
 const sanitizeShort = createRichTextSanitizer(window, true);
@@ -36,7 +39,7 @@ export const request = (method, payload = {}) => {
     else window.webkit.messageHandlers.webeasy.postMessage(message);
   });
 };
-const status = (message) => { $("status").textContent = message; };
+const status = (message) => { $("status").textContent = t(message); };
 const changed = () => { revision += 1; dirty = true; status("Unsaved changes."); };
 const run = (action) => async (event) => {
   event?.preventDefault();
@@ -55,7 +58,7 @@ function button(text, action) {
   return result;
 }
 function input(record, key, labelText, type = "text") {
-  const label = element("label", "stack", labelText);
+  const label = element("label", "stack", t(labelText));
   const field = document.createElement("input");
   field.type = type;
   field.value = record[key] ?? "";
@@ -122,10 +125,11 @@ function linkDetails({ pages: choices, href, text: initialText, editing, textRea
   const dialog = document.createElement("dialog");
   const form = element("form", "stack");
   form.method = "dialog";
-  form.append(element("h2", "", editing ? "Edit link" : "Insert link"));
-  const pageLabel = element("label", "stack", "Page or subpage");
+  form.append(element("h2", "", t(editing ? "Edit link" : "Insert link")));
+  const pageLabel = element("label", "stack", t("Page or subpage"));
   const pages = document.createElement("select");
-  const custom = element("option", "", "Enter a URL");
+  pages.dataset.userContent = "";
+  const custom = element("option", "", t("Enter a URL"));
   custom.value = "";
   pages.append(custom);
   for (const choice of choices) {
@@ -134,7 +138,7 @@ function linkDetails({ pages: choices, href, text: initialText, editing, textRea
     pages.append(option);
   }
   pageLabel.append(pages);
-  const urlLabel = element("label", "stack", "Link URL");
+  const urlLabel = element("label", "stack", t("Link URL"));
   const url = document.createElement("input");
   url.type = "text";
   url.inputMode = "url";
@@ -142,7 +146,7 @@ function linkDetails({ pages: choices, href, text: initialText, editing, textRea
   url.value = href;
   url.placeholder = "https://example.com";
   urlLabel.append(url);
-  const textLabel = element("label", "stack", "Link text");
+  const textLabel = element("label", "stack", t("Link text"));
   const text = document.createElement("input");
   text.type = "text";
   text.value = initialText;
@@ -150,7 +154,7 @@ function linkDetails({ pages: choices, href, text: initialText, editing, textRea
   textLabel.append(text);
   if (url.value && [...pages.options].some((option) => option.value === url.value)) pages.value = url.value;
   const validate = () => url.setCustomValidity(url.value && !safeLinkHref(url.value.trim())
-    ? "Use a web, email, telephone, or local page URL." : "");
+    ? t("Use a web, email, telephone, or local page URL.") : "");
   pages.addEventListener("change", () => {
     if (pages.value) {
       url.value = pages.value;
@@ -160,11 +164,11 @@ function linkDetails({ pages: choices, href, text: initialText, editing, textRea
   });
   url.addEventListener("input", () => { pages.value = ""; validate(); });
   const actions = element("div", "cluster");
-  const insert = element("button", "", editing ? "Save link" : "Insert link");
+  const insert = element("button", "", t(editing ? "Save link" : "Insert link"));
   insert.type = "submit";
   insert.value = "insert";
-  actions.append(insert, button("Cancel", () => dialog.close("cancel")));
-  if (editing) actions.append(button("Remove link", () => dialog.close("remove")));
+  actions.append(insert, button(t("Cancel"), () => dialog.close("cancel")));
+  if (editing) actions.append(button(t("Remove link"), () => dialog.close("remove")));
   form.append(pageLabel, urlLabel, textLabel, actions);
   form.addEventListener("submit", (event) => {
     validate();
@@ -189,11 +193,11 @@ export function richEditor(record, key, labelText, options = {}) {
   const contentProject = options.project ?? project;
   const onChange = options.onChange ?? changed;
   const wrapper = element("div", "stack");
-  const label = element("h3", "", labelText);
+  const label = element("h3", "", t(labelText));
   label.id = `label-${record.id}-${key}`;
   const toolbar = element("div", "cluster formatting");
   toolbar.setAttribute("role", "group");
-  toolbar.setAttribute("aria-label", `${labelText} formatting`);
+  toolbar.setAttribute("aria-label", t(`${labelText} formatting`));
   const field = element("div", "box stack rich-editor");
   field.contentEditable = "true";
   field.setAttribute("role", "textbox");
@@ -272,9 +276,9 @@ export function richEditor(record, key, labelText, options = {}) {
     refreshMarks();
   };
   const historyControl = (name, direction) => {
-    const control = button(name, () => travelHistory(direction));
-    control.setAttribute("aria-label", name);
-    control.title = name;
+    const control = button(t(name), () => travelHistory(direction));
+    control.setAttribute("aria-label", t(name));
+    control.title = t(name);
     editorIcon(control, name.toLowerCase());
     control.disabled = true;
     control.addEventListener("pointerdown", (event) => event.preventDefault());
@@ -383,9 +387,9 @@ export function richEditor(record, key, labelText, options = {}) {
     update(); refreshMarks();
   };
   const block = document.createElement("select");
-  block.setAttribute("aria-label", "Paragraph or heading");
+  block.setAttribute("aria-label", t("Paragraph or heading"));
   for (const [value, text] of [["p", "Paragraph"], ["h2", "Heading 2"], ["h3", "Heading 3"], ["h4", "Heading 4"], ["h5", "Heading 5"], ["h6", "Heading 6"]]) {
-    const option = element("option", "", text); option.value = value; block.append(option);
+    const option = element("option", "", t(text)); option.value = value; block.append(option);
   }
   block.addEventListener("pointerdown", () => rememberSelection(field));
   block.addEventListener("change", () => format("formatBlock", block.value));
@@ -396,8 +400,8 @@ export function richEditor(record, key, labelText, options = {}) {
   ]) {
     if (short && ["insertUnorderedList", "insertOrderedList", "formatBlock"].includes(command)) continue;
     const control = button(caption, () => format(command, value, text));
-    control.setAttribute("aria-label", text);
-    control.title = text;
+    control.setAttribute("aria-label", t(text));
+    control.title = t(text);
     editorIcon(control, {
       Bold: "strong", Italic: "italic", Emphasis: "emphasis", Strike: "strike", Underline: "underline",
       Bullets: "bulletList", Numbers: "orderedLint", Quote: "quote",
@@ -451,8 +455,8 @@ export function richEditor(record, key, labelText, options = {}) {
         update();
       } finally { control.disabled = false; }
     });
-    control.setAttribute("aria-label", kind === "image" ? "Phone image" : "Phone video");
-    control.title = kind === "image" ? "Insert image" : "Insert video";
+    control.setAttribute("aria-label", t(kind === "image" ? "Phone image" : "Phone video"));
+    control.title = t(kind === "image" ? "Insert image" : "Insert video");
     editorIcon(control, kind);
     control.disabled = !native;
     control.addEventListener("pointerdown", () => rememberSelection(field));
@@ -466,7 +470,7 @@ export function richEditor(record, key, labelText, options = {}) {
     }
     return (node.nodeType === 1 ? node : node.parentElement)?.closest("a");
   };
-  const link = button("Link", async () => {
+  const link = button(t("Link"), async () => {
     const linkRange = restoreSelection(field).cloneRange();
     const current = selectedLink(linkRange);
     const selectedText = linkRange.toString();
@@ -503,9 +507,9 @@ export function richEditor(record, key, labelText, options = {}) {
     }
     update(); refreshMarks();
   });
-  link.setAttribute("aria-label", "Link");
+  link.setAttribute("aria-label", t("Link"));
   link.setAttribute("aria-pressed", "false");
-  link.title = "Insert or edit link";
+  link.title = t("Insert or edit link");
   editorIcon(link, "link");
   link.addEventListener("pointerdown", (event) => { rememberSelection(field); event.preventDefault(); });
   marks.append(link);
@@ -610,8 +614,8 @@ function collection(owner, key, title, create, renderRecord) {
       [owner[key][index], owner[key][target]] = [owner[key][target], owner[key][index]];
       changed(); renderEditor();
     };
-    actions.append(button("Move up", () => move(-1)), button("Move down", () => move(1)),
-      button("Remove", () => { owner[key].splice(index, 1); changed(); renderEditor(); }));
+    actions.append(button(t("Move up"), () => move(-1)), button(t("Move down"), () => move(1)),
+      button(t("Remove"), () => { owner[key].splice(index, 1); changed(); renderEditor(); }));
     card.append(...renderRecord(record), actions);
     wrapper.append(card);
   });
@@ -719,23 +723,23 @@ function renderEditor() {
     changed(); renderLists();
   };
   if (kind === "page") {
-    const home = button("Use as home page", () => {
+    const home = button(t("Use as home page"), () => {
       project.homePageId = record.id; changed(); renderEditor();
     });
     if (project.homePageId === record.id) { home.textContent = "Current home page"; home.disabled = true; }
-    actions.append(home, button("Move page up", () => move(-1)), button("Move page down", () => move(1)));
+    actions.append(home, button(t("Move page up"), () => move(-1)), button(t("Move page down"), () => move(1)));
   }
-  actions.append(button("Delete this item and its owned content", () => {
+  actions.append(button(t("Delete this item and its owned content"), () => {
     const dialog = document.createElement("dialog");
     dialog.append(element("p", "", "Delete this item, its subpages, sections, and asides?"));
-    dialog.append(button("Delete", () => {
+    dialog.append(button(t("Delete"), () => {
       siblings.splice(siblings.indexOf(record), 1);
       if (!pageRoutes(project.pages).some((entry) => entry.record.id === project.homePageId)) {
         project.homePageId = project.pages[0]?.id ?? null;
       }
       selected = project.pages[0]?.id ?? project.news[0]?.id;
       dialog.close(); dialog.remove(); changed(); renderLists(); renderEditor();
-    }), button("Cancel", () => { dialog.close(); dialog.remove(); }));
+    }), button(t("Cancel"), () => { dialog.close(); dialog.remove(); }));
     document.body.append(dialog); dialog.showModal();
   }));
   form.append(actions);

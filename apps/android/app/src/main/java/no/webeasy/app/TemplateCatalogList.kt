@@ -22,7 +22,7 @@ internal fun TemplateCatalogList(
         for ((group, title) in listOf("templates" to "Page templates", "components" to "Reusable partials")) {
             val entries = catalog?.optJSONArray(group)
             item(key = group) {
-                Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
+                Text(ui(title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
             }
             items(entries?.length() ?: 0, key = { "$group/${entries!!.getJSONObject(it).getString("id")}" }) { index ->
                 val entry = entries!!.getJSONObject(index)

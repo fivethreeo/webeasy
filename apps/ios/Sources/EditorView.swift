@@ -195,7 +195,7 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
         }
         try HostingCredentials.save(JSONSerialization.data(withJSONObject: connection))
         backups = []; pendingHostingAction = nil; pendingHostKey = nil
-        return "Saved hosting: \(connection["host"] as? String ?? ""). Not connected yet."
+        return "\(ui("Saved hosting")): \(connection["host"] as? String ?? ""). \(ui("Not connected yet."))"
     }
 
     func savePublishingSettings(publicPathPrefix: String, uploadSubfolder: String) async throws -> HostingDestination {
@@ -654,7 +654,7 @@ struct EditorView: View {
             Button("Restore", role: .destructive) { model.restoreBackup(backup) }
             Button("Cancel", role: .cancel) {}
         } message: { backup in
-            Text("Replace the current database, media and website customizations with \(backup.directory.lastPathComponent)? Unsaved edits will be discarded. Hosting credentials are unchanged.")
+            Text(backup.directory.lastPathComponent + "\n" + ui("Replace the current database, media and website customizations with this backup? Unsaved edits will be discarded. Hosting credentials are unchanged."))
         }
         .sheet(item: $model.preview) { item in
             if item.path.isEmpty {
@@ -670,17 +670,17 @@ struct EditorView: View {
         }
         .alert("Trust SFTP server key?", isPresented: Binding(get: { model.pendingHostKey != nil },
             set: { if !$0 { model.pendingHostKey = nil; model.pendingHostingAction = nil } }), presenting: model.pendingHostKey) { key in
-            Button(model.pendingHostingAction != nil ? "Trust and continue" : model.hostKeyForTemplates ? "Trust and load" : "Trust and publish") { model.trustHostKey(key) }
+            Button(ui(model.pendingHostingAction != nil ? "Trust and continue" : model.hostKeyForTemplates ? "Trust and load" : "Trust and publish")) { model.trustHostKey(key) }
             Button("Cancel", role: .cancel) {}
         } message: { key in
-            Text("\(key.host):\(key.port)\n\(key.fingerprint)\nCompare this fingerprint with your server before trusting it. No password has been sent.")
+            Text("\(key.host):\(key.port)\n\(key.fingerprint)\n" + ui("Compare this fingerprint with your server before trusting it. No password has been sent."))
         }
     }
 
     private func contentList(news isNews: Bool) -> some View {
         NavigationStack {
             List {
-                Text(model.status)
+                Text(ui(model.status))
                 if isNews { Button("Latest three news items") { model.site("news/index.html", export: false) } }
                 ForEach(isNews ? model.news : model.pages) { node in
                     NavigationLink(node.fields["menuTitle"].flatMap { isNews ? nil : $0 } ?? node.fields["title"] ?? "Untitled") {
@@ -696,13 +696,13 @@ struct EditorView: View {
                     else { model.pages.move(fromOffsets: source, toOffset: destination) }
                     model.changed()
                 }
-                Button(isNews ? "Add news" : "Add page") {
+                Button(ui(isNews ? "Add news" : "Add page")) {
                     let node = model.newNode(isNews ? .news : .page, siblings: isNews ? model.news : model.pages, rootPage: !isNews)
                     if isNews { model.news.append(node) } else { model.pages.append(node) }
                     model.changed()
                 }
             }
-            .navigationTitle(isNews ? "News" : "Pages")
+            .navigationTitle(ui(isNews ? "News" : "Pages"))
             .toolbar {
                 EditButton()
                 Button("Save") { model.save() }.disabled(!model.ready || model.busy)
@@ -739,7 +739,7 @@ struct EditorView: View {
 
     private func examples(title: String) -> some View {
         List {
-            Text(model.status)
+            Text(ui(model.status))
             if model.advancedUI {
                 Button("Load templates from server") { model.loadServerTemplates() }.disabled(!model.ready || model.busy)
                 Text("Export templates and assets explicitly to hosting from Advanced settings, then load the edited HTML here.")
@@ -761,7 +761,7 @@ struct EditorView: View {
 
     private func customizations() -> some View {
         Form {
-            Text(model.status)
+            Text(ui(model.status))
             Text("Export editable templates and public website assets to the configured hosting destination and upload subfolder. Edit them on the server, then load both back. Native editor resources cannot be changed.")
             Button("Export templates and assets to hosting") { model.exportCustomization() }
                 .disabled(!model.advancedUI || !model.ready || model.busy || !model.hasHosting)
@@ -774,7 +774,7 @@ struct EditorView: View {
 
     private func backups() -> some View {
         List {
-            Text(model.status)
+            Text(ui(model.status))
             Text("Back up saved SQLite content, customizations and all media on hosting in UTC datetime directories. Unsaved edits are not included.")
             LabeledTextField(title: "Private server backup directory", text: $model.backupDirectory)
                 .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(model.busy)
@@ -802,9 +802,9 @@ struct LabeledTextField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.headline)
+            Text(ui(title)).font(.headline)
             TextField("", text: $text)
-                .accessibilityLabel(title)
+                .accessibilityLabel(ui(title))
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -849,10 +849,10 @@ private struct NativeContentForm: View {
                     Picker("Page layout", selection: Binding(get: { node.fields["templateId"] ?? "page" },
                                                              set: { node.fields["templateId"] = $0; model.changed() })) {
                         ForEach(model.catalog?.templates.filter { $0.pageLayout == true } ?? []) { entry in
-                            Text(entry.title).tag(entry.id)
+                            Text(ui(entry.title)).tag(entry.id)
                         }
                     }
-                    Button(model.homePageID == node.id ? "Current homepage" : "Use as homepage") {
+                    Button(ui(model.homePageID == node.id ? "Current homepage" : "Use as homepage")) {
                         model.homePageID = node.id; model.changed()
                     }.disabled(model.homePageID == node.id)
                 }
@@ -863,7 +863,7 @@ private struct NativeContentForm: View {
                 if kind == .section { LabeledTextField(title: "Subheading (optional)", text: text("subheading")) }
             }
             Section(kind == .news ? "Short content" : "Content") {
-                Button(kind == .news ? "Edit short content" : "Edit content") { editingShort = kind == .news; editingContent = true }
+                Button(ui(kind == .news ? "Edit short content" : "Edit content")) { editingShort = kind == .news; editingContent = true }
                 if kind == .news { Text("Paragraphs and inline formatting only, including links.") }
             }
             if kind == .news {
@@ -875,7 +875,7 @@ private struct NativeContentForm: View {
                 Section("Cover image (optional)") {
                     let coverID = node.fields["coverMediaId"] ?? ""
                     if !coverID.isEmpty { Text("Cover selected") }
-                    Button(coverID.isEmpty ? "Add cover image" : "Replace cover image") {
+                    Button(ui(coverID.isEmpty ? "Add cover image" : "Replace cover image")) {
                         coverOptions = nil; editingCover = true
                     }.disabled(model.busy)
                     if !coverID.isEmpty {
@@ -920,7 +920,7 @@ private struct NativeContentForm: View {
             if kind == .news {
                 Button("Preview news") { model.site("news/\(node.fields["date"] ?? "")/\(node.fields["slug"] ?? "")/index.html", export: false) }
             }
-            Text(model.status)
+            Text(ui(model.status))
         }
         .navigationTitle(node.fields[kind == .page || kind == .news ? "title" : "heading"] ?? "Content")
         .navigationBarBackButtonHidden(true)
@@ -935,7 +935,7 @@ private struct NativeContentForm: View {
         .fullScreenCover(isPresented: $editingContent) {
             NavigationStack {
                 NativeRichField(content: text(editingShort ? "shortContent" : "content"), model: model, paragraphsOnly: editingShort)
-                    .navigationTitle(editingShort ? "Short content" : kind == .news ? "Long content" : "Content")
+                    .navigationTitle(ui(editingShort ? "Short content" : kind == .news ? "Long content" : "Content"))
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         Button("Done") { editingContent = false }

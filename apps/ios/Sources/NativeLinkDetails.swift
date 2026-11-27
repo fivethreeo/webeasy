@@ -52,17 +52,17 @@ struct LinkDetailsView: View {
                     LabeledTextField(title: "Link text", text: $text).disabled(textReadOnly)
                 }
                 .disabled(checking)
-                if !error.isEmpty { Section { Text(error).foregroundStyle(.red) } }
+                if !error.isEmpty { Section { Text(ui(error)).foregroundStyle(.red) } }
                 if editing {
                     Section { Button("Remove link", role: .destructive) { finish(["remove": true]) } }
                 }
             }
-            .navigationTitle(editing ? "Edit link" : "Insert link")
+            .navigationTitle(ui(editing ? "Edit link" : "Insert link"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { finish(nil) } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(editing ? "Save link" : "Insert link", action: submit).disabled(checking)
+                    Button(ui(editing ? "Save link" : "Insert link"), action: submit).disabled(checking)
                 }
             }
         }

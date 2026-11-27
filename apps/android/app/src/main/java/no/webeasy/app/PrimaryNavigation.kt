@@ -29,14 +29,14 @@ internal fun PrimaryNavigation(rail: Boolean, selectedTab: Int, onSelect: (Int) 
         NavigationRail(Modifier.fillMaxHeight()) {
             destinations.forEachIndexed { index, (name, resource) ->
                 NavigationRailItem(selected = selectedTab == index, onClick = { onSelect(index) },
-                    icon = { icon(resource) }, label = { Text(name) })
+                    icon = { icon(resource) }, label = { Text(ui(name)) })
             }
         }
     } else {
         NavigationBar {
             destinations.forEachIndexed { index, (name, resource) ->
                 NavigationBarItem(selected = selectedTab == index, onClick = { onSelect(index) },
-                    icon = { icon(resource) }, label = { Text(name) })
+                    icon = { icon(resource) }, label = { Text(ui(name)) })
             }
         }
     }
