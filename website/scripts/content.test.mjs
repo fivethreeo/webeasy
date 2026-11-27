@@ -35,7 +35,7 @@ test("short news uses only paragraphs and inline formatting while long news reta
   assert.ok(!listing.includes("Long body"));
 });
 
-test("legacy news keeps its full short-field markup as long content and covers appear in both news views", () => {
+test("legacy news keeps its full short-field markup as long content and covers appear only on articles", () => {
   const project = structuredClone(input);
   project.news[0].shortContent = '<h2>Legacy heading</h2><figure><img src="media/legacy.jpg" alt="Legacy"></figure>';
   project.media = [{ id: "legacy-media", filename: "legacy.jpg", mimeType: "image/jpeg", originalName: "legacy.jpg", size: 12 }];
@@ -45,12 +45,12 @@ test("legacy news keeps its full short-field markup as long content and covers a
   assert.ok(normalized.news[0].content.includes("<figure"));
   assert.equal(dom(normalized.news[0].shortContent).querySelector("img"), null);
   const files = renderSite(normalized, catalog);
-  const paths = ["news/index.html", `news/${project.news[0].date}/${project.news[0].slug}/index.html`];
-  for (const path of paths) {
-    const image = dom(files.find((file) => file.path === path).html).querySelector(".cover-image img");
-    assert.equal(image.getAttribute("src"), "media/legacy.jpg");
-    assert.equal(image.getAttribute("alt"), '"<cover>');
-  }
+  const listing = dom(files.find((file) => file.path === "news/index.html").html);
+  assert.equal(listing.querySelector(".cover-image"), null);
+  const article = dom(files.find((file) => file.path === `news/${project.news[0].date}/${project.news[0].slug}/index.html`).html);
+  const image = article.querySelector(".cover-image img");
+  assert.equal(image.getAttribute("src"), "media/legacy.jpg");
+  assert.equal(image.getAttribute("alt"), '"<cover>');
   assert.ok(referencedMedia(normalized, contentWindow).includes("media/legacy.jpg"));
 });
 
