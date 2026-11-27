@@ -7,6 +7,7 @@ struct DirectoryToolsTests {
         let root = files.temporaryDirectory.appendingPathComponent("webeasy-directory-test-\(UUID())", isDirectory: true)
         try files.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? files.removeItem(at: root) }
+        try pathTests(root)
         let customization = root.appendingPathComponent("customization", isDirectory: true)
         try files.createDirectory(at: customization, withIntermediateDirectories: false)
         let path = "webeasy_templates/templates/master.html"
@@ -66,6 +67,30 @@ struct DirectoryToolsTests {
         } catch {}
         try await hostingTests(root, snapshot: snapshot, now: now)
         print("Directory and hosting customization, backup integrity, and retention tests passed.")
+    }
+
+    static func pathTests(_ root: URL) throws {
+        let files = FileManager.default
+        let selected = root.appendingPathComponent("path-checks", isDirectory: true)
+        let outside = root.appendingPathComponent("path-checks-outside", isDirectory: true)
+        try files.createDirectory(at: selected, withIntermediateDirectories: false)
+        try files.createDirectory(at: outside, withIntermediateDirectories: false)
+        for folder in [selected, URL(fileURLWithPath: selected.path + "///", isDirectory: true)] {
+            let target = try DirectoryTools.safeFile(folder, "nested/webeasy-backup.json")
+            precondition(target.standardizedFileURL.pathComponents.last == "webeasy-backup.json")
+        }
+        try DirectoryTools.validatePath("2026-11-27_05-36-07-001Z/webeasy-backup.json")
+        for path in ["", "/backups", "../outside", "nested/../outside", "nested//file", "nested/", "./file", "nested\\file", "nested/%2e%2e/file"] {
+            do {
+                try DirectoryTools.validatePath(path)
+                preconditionFailure("Unsafe relative path accepted.")
+            } catch {}
+        }
+        try files.createSymbolicLink(at: selected.appendingPathComponent("link"), withDestinationURL: outside)
+        do {
+            _ = try DirectoryTools.safeFile(selected, "link/file.txt")
+            preconditionFailure("Symlink escape into a shared-prefix sibling accepted.")
+        } catch {}
     }
 
     static func remote(_ root: URL, identity: String = "fixture") -> HostingDirectory {

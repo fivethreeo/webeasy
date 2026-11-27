@@ -15,7 +15,7 @@ struct HostingDirectory: Sendable {
     let remove: @Sendable (String, Bool) async throws -> Void
 
     func url(_ name: String) throws -> URL {
-        _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), name)
+        try DirectoryTools.validatePath(name)
         guard !name.contains("/"), let url = URL(string: "webeasy-hosting://\(identity)/\(name)") else {
             throw ContentError.invalid("Invalid backup directory.")
         }
@@ -23,7 +23,8 @@ struct HostingDirectory: Sendable {
     }
 
     func entries(_ path: String) async throws -> [File] {
-        if !path.isEmpty { _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), path) }
+        // Remote paths have no local filesystem to resolve; inspect remote links below.
+        if !path.isEmpty { try DirectoryTools.validatePath(path) }
         let files = try await list(path).filter { $0.name != "." && $0.name != ".." }
         guard files.count <= 100_000, Set(files.map(\.name)).count == files.count,
               files.allSatisfy({ !$0.name.contains("/") && !$0.name.contains("\\") }) else {
@@ -38,7 +39,7 @@ struct HostingDirectory: Sendable {
         for count in 1...parts.count {
             let current = parts.prefix(count).joined(separator: "/")
             let parent = parts.prefix(count - 1).joined(separator: "/")
-            _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), current)
+            try DirectoryTools.validatePath(current)
             if let found = try await entries(parent).first(where: { $0.name == String(parts[count - 1]) }) {
                 guard found.directory, !(exclusive && count == parts.count) else {
                     throw ContentError.invalid("Hosting path already exists or is not a directory.")
@@ -50,7 +51,7 @@ struct HostingDirectory: Sendable {
     }
 
     func write(_ local: URL, path: String) async throws {
-        _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), path)
+        try DirectoryTools.validatePath(path)
         let parts = path.split(separator: "/")
         let parent = parts.dropLast().joined(separator: "/")
         if !parent.isEmpty { try await ensureDirectory(parent) }
@@ -61,7 +62,7 @@ struct HostingDirectory: Sendable {
     }
 
     func read(_ path: String, to local: URL, maximum: Int64) async throws {
-        _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), path)
+        try DirectoryTools.validatePath(path)
         guard maximum >= 0 else { throw ContentError.invalid("Invalid download size.") }
         let parts = path.split(separator: "/")
         var parent = ""
@@ -87,7 +88,7 @@ struct HostingDirectory: Sendable {
             for file in try await entries(folder) {
                 if ignoreHidden && (file.name.hasPrefix(".") || file.name == "Thumbs.db") { continue }
                 let child = relative + file.name
-                _ = try DirectoryTools.safeFile(URL(fileURLWithPath: "/webeasy-hosting"), child)
+                try DirectoryTools.validatePath(child)
                 guard files.count + directories.count < 100_000 else { throw ContentError.invalid("Too many directory entries.") }
                 if file.directory {
                     directories.insert(child)

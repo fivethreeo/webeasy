@@ -97,13 +97,21 @@ enum DirectoryTools {
         return result
     }
 
-    static func safeFile(_ root: URL, _ path: String) throws -> URL {
+    static func validatePath(_ path: String) throws {
         guard path.range(of: "^[A-Za-z0-9][A-Za-z0-9._/-]*$", options: .regularExpression) != nil,
               !path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
             throw ContentError.invalid("Invalid directory path.")
         }
+    }
+
+    static func safeFile(_ root: URL, _ path: String) throws -> URL {
+        try validatePath(path)
         let target = root.appendingPathComponent(path)
-        guard target.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else {
+        // Compare resolved components, not slash-sensitive URL strings.
+        let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let targetComponents = target.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard targetComponents.count > rootComponents.count,
+              targetComponents.starts(with: rootComponents) else {
             throw ContentError.invalid("Directory path escapes the selected folder.")
         }
         return target
