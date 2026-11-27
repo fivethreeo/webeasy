@@ -26,6 +26,7 @@ import java.util.zip.ZipFile
 class ContentStoreTest {
     private lateinit var context: Context
     private lateinit var store: ContentStore
+    private lateinit var starterMedia: Set<String>
 
     @Before
     fun setUp() {
@@ -33,10 +34,56 @@ class ContentStoreTest {
         context.deleteDatabase("webeasy.sqlite")
         java.io.File(context.filesDir, "Media").deleteRecursively()
         store = ContentStore(context)
+        starterMedia = store.project().getJSONArray("media").let { records ->
+            (0 until records.length()).map { records.getJSONObject(it).getString("filename") }.toSet()
+        }
     }
 
     @After
     fun tearDown() { store.close() }
+
+    @Test
+    fun freshStarterIncludesEditableSiteMediaAndTheme() {
+        val project = store.project()
+        assertEquals(4, project.getJSONArray("pages").length())
+        assertEquals(3, project.getJSONArray("news").length())
+        assertEquals(4, project.getJSONArray("media").length())
+        val media = project.getJSONArray("media")
+        for (index in 0 until media.length()) {
+            val record = media.getJSONObject(index)
+            val name = record.getString("filename")
+            assertArrayEquals(context.assets.open("website/starter/media/$name").use { it.readBytes() },
+                java.io.File(store.mediaDirectory, name).readBytes())
+        }
+        assertTrue(store.templateSources()!!.getString("webeasy_templates/components/site-header.html").contains("Fjord"))
+        assertTrue(store.assetFiles().getValue("assets/site.css").isNotEmpty())
+        assertNull(store.publishedSnapshot())
+    }
+
+    @Test
+    fun missingSeedMarkerCannotReplaceExistingContentOrCustomization() {
+        val project = store.project()
+        project.getJSONArray("pages").getJSONObject(0).put("title", "Keep my site")
+        store.save(project)
+        val sources = store.templateSources().toString()
+        val css = store.assetFiles().getValue("assets/site.css")
+        store.writableDatabase.execSQL("DELETE FROM metadata WHERE key = 'seeded'")
+        store.close(); store = ContentStore(context)
+        assertEquals("Keep my site", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+        assertEquals(sources, store.templateSources().toString())
+        assertArrayEquals(css, store.assetFiles().getValue("assets/site.css"))
+    }
+
+    @Test
+    fun unmarkedLegacyContentWithoutMetadataIsNotSeeded() {
+        val project = store.project()
+        project.getJSONArray("pages").getJSONObject(0).put("title", "Legacy site")
+        store.save(project)
+        store.writableDatabase.execSQL("DELETE FROM metadata")
+        store.close(); store = ContentStore(context)
+        assertEquals("Legacy site", store.project().getJSONArray("pages").getJSONObject(0).getString("title"))
+        assertNull(store.templateSources())
+    }
 
     @Test
     fun backupRestoresDatabaseMediaAndCustomizationTogether() {
@@ -99,7 +146,7 @@ class ContentStoreTest {
     fun seedsOwnedContentAndReopeningPreservesChangesAndDeletion() {
         val project = store.project()
         val page = project.getJSONArray("pages").getJSONObject(0)
-        assertEquals("team", page.getJSONArray("children").getJSONObject(0).getString("slug"))
+        assertEquals("woodland-path", project.getJSONArray("pages").getJSONObject(1).getJSONArray("children").getJSONObject(0).getString("slug"))
         assertEquals(1, page.getJSONArray("sections").getJSONObject(0).getJSONArray("asides").length())
         page.put("title", "Locally edited")
         store.save(project)
@@ -170,7 +217,7 @@ class ContentStoreTest {
 
     @Test
     fun downloadedTemplatesPersistAcrossContentSavesAndAppReopening() {
-        assertNull(store.templateSources())
+        assertTrue(store.templateSources()!!.getString("webeasy_templates/components/site-header.html").contains("Fjord"))
         val sources = JSONObject().put("webeasy_templates/templates/master.html", "<html>Edited{{{content}}}</html>")
         store.saveTemplateSources(sources)
         val project = store.project()
@@ -237,6 +284,7 @@ class ContentStoreTest {
     }
 
     private fun writableLegacyTemplate(path: String) {
+        store.writableDatabase.execSQL("DELETE FROM metadata WHERE key = 'template_source_index' OR key LIKE 'template_source/%'")
         store.writableDatabase.execSQL("INSERT OR REPLACE INTO metadata (key, value) VALUES ('template_sources', ?)",
             arrayOf(JSONObject().put(path, "Legacy source").toString()))
     }
@@ -253,7 +301,7 @@ class ContentStoreTest {
         store.save(project)
         store.close()
         store = ContentStore(context)
-        assertEquals(1, store.project().getJSONArray("media").length())
+        assertEquals(starterMedia.size + 1, store.project().getJSONArray("media").length())
         assertTrue(store.project().getJSONArray("pages").getJSONObject(0).getString("content").contains(filename))
         val unused = store.importMedia(ByteArrayInputStream(bytes), "image/png", "Cancelled figure.png")
         val files = JSONArray().put(JSONObject().put("path", "index.html").put("html", "<h1>Home</h1>"))
@@ -262,7 +310,7 @@ class ContentStoreTest {
         ZipFile(archive).use { zip ->
             val entries = zip.entries().asSequence().map { it.name }.toSet()
             assertTrue(entries.containsAll(setOf("index.html", "about/team/index.html", "assets/site.css", "assets/site.js", "assets/logo.svg", "assets/coast.svg", "media/$filename")))
-            assertArrayEquals(context.assets.open("website/assets/logo.svg").use { it.readBytes() },
+            assertArrayEquals(store.assetFiles().getValue("assets/logo.svg"),
                 zip.getInputStream(zip.getEntry("assets/logo.svg")).readBytes())
             assertFalse(entries.any { it.endsWith(".sqlite") || it in setOf("storage.sql", "content.json", "catalog.json", "editor.html", "assets/editor.js") })
             assertFalse(entries.contains("media/${unused.getString("filename")}"))
@@ -284,7 +332,7 @@ class ContentStoreTest {
         assertArrayEquals(bytes, java.io.File(store.mediaDirectory, "coast.png").readBytes())
         assertArrayEquals(bytes + byteArrayOf(0), java.io.File(store.mediaDirectory, "coast-2.png").readBytes())
         store.close(); store = ContentStore(context)
-        assertEquals(setOf("coast.png", "coast-2.png", "Coast-3.png", "coast.mp4"),
+        assertEquals(starterMedia + setOf("coast.png", "coast-2.png", "Coast-3.png", "coast.mp4"),
             store.project().getJSONArray("media").let { records ->
                 (0 until records.length()).map { records.getJSONObject(it).getString("filename") }.toSet()
             })
@@ -303,8 +351,8 @@ class ContentStoreTest {
                 store.importMedia(ByteArrayInputStream(byteArrayOf(1)), "image/png", "Phone.png", basename)
             }
         }
-        assertEquals(0, store.project().getJSONArray("media").length())
-        assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        assertEquals(starterMedia.size, store.project().getJSONArray("media").length())
+        assertEquals(starterMedia.size, store.mediaDirectory.listFiles()!!.size)
         for (path in listOf("../webeasy.sqlite", "/private/file", "media/%2e%2e/file", "child/../../file")) {
             assertThrows(IllegalArgumentException::class.java) { ContentStore.safeFile(store.mediaDirectory, path) }
         }
@@ -354,8 +402,8 @@ class ContentStoreTest {
         assertThrows(IllegalArgumentException::class.java) {
             store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Small output.jpg", width = 400, quality = 85, minimumWidth = 1200)
         }
-        assertEquals(0, store.project().getJSONArray("media").length())
-        assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        assertEquals(starterMedia.size, store.project().getJSONArray("media").length())
+        assertEquals(starterMedia.size, store.mediaDirectory.listFiles()!!.size)
         val cover = store.importMedia(ByteArrayInputStream(bytes), "image/jpeg", "Cover.jpg", width = 1200, quality = 85, minimumWidth = 1200)
         val project = store.project()
         val news = project.getJSONArray("news").getJSONObject(0)
@@ -373,7 +421,7 @@ class ContentStoreTest {
         loaded.put("coverMediaId", "").put("coverAlt", "")
         store.save(store.project().also { it.getJSONArray("news").put(0, loaded) })
         assertEquals("", store.project().getJSONArray("news").getJSONObject(0).getString("coverMediaId"))
-        assertEquals(1, store.project().getJSONArray("media").length())
+        assertEquals(starterMedia.size + 1, store.project().getJSONArray("media").length())
     }
 
     @Test
@@ -390,8 +438,8 @@ class ContentStoreTest {
             assertThrows(IllegalArgumentException::class.java) {
                 store.importMedia(source.inputStream(), "image/jpeg", "Rotated cover.jpg", minimumWidth = 1200)
             }
-            assertEquals(0, store.project().getJSONArray("media").length())
-            assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+            assertEquals(starterMedia.size, store.project().getJSONArray("media").length())
+            assertEquals(starterMedia.size, store.mediaDirectory.listFiles()!!.size)
         } finally { source.delete() }
     }
 
@@ -445,8 +493,8 @@ class ContentStoreTest {
         assertThrows(IllegalArgumentException::class.java) {
             store.importMedia(ByteArrayInputStream(animated), "image/gif", "Animation.gif", width = 1)
         }
-        assertEquals(0, store.project().getJSONArray("media").length())
-        assertEquals(0, store.mediaDirectory.listFiles()!!.size)
+        assertEquals(starterMedia.size, store.project().getJSONArray("media").length())
+        assertEquals(starterMedia.size, store.mediaDirectory.listFiles()!!.size)
         val original = store.importMedia(ByteArrayInputStream(animated), "image/gif", "Animation.gif")
         assertArrayEquals(animated, java.io.File(store.mediaDirectory, original.getString("filename")).readBytes())
     }
@@ -488,14 +536,15 @@ class ContentStoreTest {
         val project = store.project()
         val first = project.getJSONArray("pages").getJSONObject(0)
         assertEquals(first.getString("id"), project.getString("homePageId"))
-        val child = first.getJSONArray("children").getJSONObject(0)
+        val parent = project.getJSONArray("pages").getJSONObject(1)
+        val child = parent.getJSONArray("children").getJSONObject(0)
         project.put("homePageId", child.getString("id"))
         store.save(project); store.close(); store = ContentStore(context)
         assertEquals(child.getString("id"), store.project().getString("homePageId"))
         val invalid = JSONObject(project.toString()).put("homePageId", "missing")
         assertThrows(Exception::class.java) { store.save(invalid) }
         assertEquals(child.getString("id"), store.project().getString("homePageId"))
-        first.put("children", JSONArray()); project.put("homePageId", first.getString("id"))
+        parent.put("children", JSONArray()); project.put("homePageId", first.getString("id"))
         store.save(project)
         assertEquals(first.getString("id"), store.project().getString("homePageId"))
     }
@@ -535,7 +584,7 @@ class ContentStoreTest {
         val project = store.project()
         val drafts = ContentDrafts()
         drafts.markSaved(drafts.capture(project))
-        val page = project.getJSONArray("pages").getJSONObject(0)
+        val page = project.getJSONArray("pages").getJSONObject(1)
         val child = page.getJSONArray("children").getJSONObject(0)
         val news = project.getJSONArray("news").getJSONObject(0)
         assertFalse(drafts.hasChanges(page, project))
@@ -578,12 +627,14 @@ class ContentStoreTest {
         val project = store.project()
         val drafts = ContentDrafts()
         drafts.markSaved(drafts.capture(project))
-        val page = project.getJSONArray("pages").getJSONObject(0)
+        val pageCount = project.getJSONArray("pages").length()
+        val home = project.getString("homePageId")
+        val page = project.getJSONArray("pages").getJSONObject(1)
         val child = page.getJSONArray("children").getJSONObject(0)
         project.put("homePageId", child.getString("id"))
         assertTrue(drafts.hasChanges(child, project))
         drafts.discard(child, project)
-        assertEquals(page.getString("id"), project.getString("homePageId"))
+        assertEquals(home, project.getString("homePageId"))
         page.put("title", "Saving this")
         val snapshot = drafts.capture(project)
         page.put("title", "Newer edit")
@@ -595,6 +646,6 @@ class ContentStoreTest {
         project.getJSONArray("pages").put(fresh)
         assertTrue(drafts.hasChanges(fresh, project))
         drafts.discard(fresh, project)
-        assertEquals(1, project.getJSONArray("pages").length())
+        assertEquals(pageCount, project.getJSONArray("pages").length())
     }
 }

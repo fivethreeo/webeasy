@@ -40,9 +40,26 @@ test("native packages contain the entire generated site byte-for-byte", async ()
     "apps/ios/Resources/Website",
     "apps/android/app/build/generated/websiteAssets/website",
   ]) {
-    assert.deepEqual(await files(path.join(root, target)), expected);
+    const starter = path.join(root, "shared/starter-site");
+    const starterFiles = await files(starter);
+    assert.deepEqual(await files(path.join(root, target)), [...expected, ...starterFiles.map(file => `starter/${file}`)].sort());
     for (const file of expected) {
       assert.deepEqual(await readFile(path.join(root, target, file)), await readFile(path.join(source, file)));
+    }
+    for (const file of starterFiles) {
+      assert.deepEqual(await readFile(path.join(root, target, "starter", file)), await readFile(path.join(starter, file)));
+    }
+    const project = JSON.parse(await readFile(path.join(starter, "content.json"), "utf8"));
+    for (const media of project.media) {
+      assert.equal((await readFile(path.join(starter, "media", media.filename))).length, media.size);
+    }
+    const metadata = JSON.parse(await readFile(path.join(starter, "metadata.json"), "utf8"));
+    assert.ok(Object.keys(metadata).every(key => ["template_source_index", "asset_overrides"].includes(key)
+      || key.startsWith("template_source/") || key.startsWith("asset_chunk/")));
+    for (const [file, asset] of Object.entries(JSON.parse(metadata.asset_overrides))) {
+      const bytes = Buffer.concat(Array.from({ length: asset.chunks }, (_, index) =>
+        Buffer.from(metadata[`asset_chunk/${file}/${index}`], "base64")));
+      assert.equal(bytes.length, asset.size);
     }
   }
   const catalog = JSON.parse(await readFile(path.join(source, "catalog.json"), "utf8"));

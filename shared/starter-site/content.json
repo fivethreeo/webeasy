@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "slug": "home",
+      "id": "1a051add-64c4-481c-b489-237aa50ec186",
+      "title": "Small journeys, deeply noticed.",
+      "menuTitle": "Home",
+      "templateId": "landing-page",
+      "content": "<p>Welcome to <strong>Fjord &amp; Field</strong>, a small collection of coastal places, quiet films and notes from the path.</p><p>Stay for a moment. There is no itinerary to finish.</p>",
+      "date": "2026-11-27",
+      "coverMediaId": "8ad3da47-1ebd-4008-b494-d85f57d58493",
+      "coverAlt": "An original illustration of a quiet fjord in warm morning light.",
+      "sections": [
+        {
+          "id": "1e8b2fe3-e8a5-4c10-b598-8523fe3e243c",
+          "heading": "Take the slower route",
+          "subheading": "A little salt air. A little room to think.",
+          "content": "<p>Start at the water, wander into the woodland, and follow whatever catches your attention.</p><p><a href=\"places/\">Explore the places</a> or <a href=\"places/woodland-path/\">take the woodland path</a>.</p>",
+          "asides": [
+            {
+              "id": "344008b5-2247-4e0d-88d4-98d8bb9ec747",
+              "heading": "In the field",
+              "content": "<p>Three original landscape illustrations. One short film. A whole site you can make your own.</p>"
+            }
+          ]
+        },
+        {
+          "id": "825cc0cf-d106-414b-98da-8ffc502efd6d",
+          "heading": "A moment in motion",
+          "subheading": "Eight seconds beside the water.",
+          "content": "<figure class=\"stack\"><video controls=\"\" playsinline=\"\" preload=\"metadata\" poster=\"media/fjord-morning.png\"><source src=\"media/slow-tide.mp4\" type=\"video/mp4\"></video><figcaption>Slow tide. Eight seconds of original landscape artwork, gently in motion. No sound.</figcaption></figure>",
+          "asides": []
+        }
+      ],
+      "asides": [],
+      "children": []
+    },
+    {
+      "slug": "places",
+      "id": "128aee82-010b-4612-b96c-cf5f74bb67a4",
+      "title": "Places worth pausing for.",
+      "menuTitle": "Places",
+      "templateId": "page",
+      "content": "<p>A fjord in the morning, a path through the trees, an island after the sun has slipped away. These are beginnings, not destinations.</p><p><a href=\"places/woodland-path/\">Read the woodland field guide</a>.</p>",
+      "date": "2026-11-27",
+      "coverMediaId": "cb0ca206-af63-4039-857c-960f738e6c3c",
+      "coverAlt": "An original illustration of an island lighthouse at sunset.",
+      "sections": [
+        {
+          "id": "0fc1bc31-8401-4cda-9bed-2cf8a7b9c214",
+          "heading": "Morning at the fjord",
+          "subheading": "Blue-green water and a little golden light.",
+          "content": "<figure class=\"stack\"><img src=\"media/fjord-morning.png\" alt=\"Quiet mountain silhouettes above a blue-green fjord.\" loading=\"lazy\"><figcaption>Fjord morning. Original artwork for this demo.</figcaption></figure><p>The shoreline is a good place to start again. Let the shapes of the hills set the pace.</p>",
+          "asides": []
+        },
+        {
+          "id": "af0e3aa5-a63d-4d27-9bf7-58f7d86c167f",
+          "heading": "Into the woodland",
+          "subheading": "A path with no hurry.",
+          "content": "<figure class=\"stack\"><img src=\"media/woodland-path.png\" alt=\"A warm ochre path winding between green trees.\" loading=\"lazy\"><figcaption>Woodland path. Original artwork for this demo.</figcaption></figure>",
+          "asides": []
+        }
+      ],
+      "asides": [],
+      "children": [
+        {
+          "slug": "woodland-path",
+          "id": "dbe0f9a4-b75b-4e31-8842-e12c47f5735b",
+          "title": "The woodland path",
+          "menuTitle": "Woodland path",
+          "templateId": "reading-page",
+          "content": "<p>Leave the main road behind. This little trail follows the shape of the hillside, through soft light and dark green trees.</p>",
+          "date": "2026-11-27",
+          "coverMediaId": "4af27449-e3a9-48bd-9919-529393f4bff8",
+          "coverAlt": "An original illustration of a winding path among dark green trees.",
+          "sections": [
+            {
+              "id": "5d0935d8-d5e5-4762-a286-ca95e1d91c34",
+              "heading": "A small field guide",
+              "subheading": "Notice more, carry less.",
+              "content": "<p>Look for the change in texture where moss meets stone. Listen before reaching for your camera. A good walk does not need a destination.</p>",
+              "asides": []
+            }
+          ],
+          "asides": [],
+          "children": []
+        }
+      ]
+    },
+    {
+      "slug": "film",
+      "id": "b5b1c2ee-0fe1-4125-a898-7b61f7fa90d7",
+      "title": "Slow tide.",
+      "menuTitle": "Film",
+      "templateId": "reading-page",
+      "content": "<p>A short, silent landscape film. Press play, let the view move a little, and then leave it still again.</p><figure class=\"stack\"><video controls=\"\" playsinline=\"\" preload=\"metadata\" poster=\"media/fjord-morning.png\"><source src=\"media/slow-tide.mp4\" type=\"video/mp4\"></video><figcaption>Slow tide. Eight seconds of original landscape artwork, gently in motion. No sound.</figcaption></figure>",
+      "date": "2026-11-27",
+      "coverMediaId": "",
+      "coverAlt": "",
+      "sections": [],
+      "asides": [
+        {
+          "id": "bc592fde-b32e-4593-b5b8-32647fa4735d",
+          "heading": "About the film",
+          "content": "<p>Eight seconds, H.264 MP4, 1280 by 720 pixels. Stored locally with the backup, so it works without a third-party video service.</p>"
+        }
+      ],
+      "children": []
+    },
+    {
+      "slug": "about",
+      "id": "1e1a5d7a-e41f-4469-9ad8-93f3225e3b02",
+      "title": "A small space for slower days.",
+      "menuTitle": "About",
+      "templateId": "reading-page",
+      "content": "<p>Fjord &amp; Field is an editable demonstration website made for Webeasy. Its pages, journal entries and layout choices live in SQLite. The pictures and film travel with the backup.</p><p>The landscapes are original illustrations, not stock photography. There are no accounts, tracking scripts, external fonts or embedded video platforms.</p><p>Change a heading, add a place, replace a picture, or publish the whole collection to your own hosting.</p>",
+      "date": "2026-11-27",
+      "coverMediaId": "4af27449-e3a9-48bd-9919-529393f4bff8",
+      "coverAlt": "An original illustration of a winding path among dark green trees.",
+      "sections": [
+        {
+          "id": "de63cc92-5674-4a24-ba2f-00b567ef7527",
+          "heading": "Make it yours",
+          "subheading": "Everything here is a starting point.",
+          "content": "<p>Open the native editor to change the pages and sections. The header, footer and warm green styling are also stored in the database as website customizations.</p>",
+          "asides": []
+        }
+      ],
+      "asides": [],
+      "children": []
+    }
+  ],
+  "news": [
+    {
+      "date": "2026-11-27",
+      "slug": "morning-without-a-plan",
+      "id": "f691c197-4eed-4a6c-925f-c38cc4fa8d1b",
+      "title": "A morning without a plan",
+      "content": "<p>Some days begin better when the first thing you do is look out of the window. Today the water was enough.</p><p>This journal entry is part of the editable demo. Keep it, change it, or write something entirely your own.</p>",
+      "shortContent": "<p>Some days begin better when the first thing you do is look out of the window. Today the water was enough.</p>",
+      "sections": [],
+      "asides": [],
+      "coverMediaId": "8ad3da47-1ebd-4008-b494-d85f57d58493",
+      "coverAlt": "Original landscape illustration for a morning without a plan."
+    },
+    {
+      "date": "2026-11-26",
+      "slug": "following-the-green-line",
+      "id": "9df3e0dc-5ae0-448b-a0f1-0c7e135dfdb2",
+      "title": "Following the green line",
+      "content": "<p>The path turned where the hillside turned. We followed it a little further than we meant to, and were glad we did.</p><p>This journal entry is part of the editable demo. Keep it, change it, or write something entirely your own.</p>",
+      "shortContent": "<p>The path turned where the hillside turned. We followed it a little further than we meant to, and were glad we did.</p>",
+      "sections": [],
+      "asides": [],
+      "coverMediaId": "4af27449-e3a9-48bd-9919-529393f4bff8",
+      "coverAlt": "Original landscape illustration for following the green line."
+    },
+    {
+      "date": "2026-11-25",
+      "slug": "island-after-sunset",
+      "id": "bdef40e6-4dbc-4b52-94a4-8f9560382758",
+      "title": "The island after sunset",
+      "content": "<p>The last light belonged to the island. A pale lighthouse, dark stone, and the long blue-green edge of the sea.</p><p>This journal entry is part of the editable demo. Keep it, change it, or write something entirely your own.</p>",
+      "shortContent": "<p>The last light belonged to the island. A pale lighthouse, dark stone, and the long blue-green edge of the sea.</p>",
+      "sections": [],
+      "asides": [],
+      "coverMediaId": "cb0ca206-af63-4039-857c-960f738e6c3c",
+      "coverAlt": "Original landscape illustration for the island after sunset."
+    }
+  ],
+  "media": [
+    {
+      "id": "8ad3da47-1ebd-4008-b494-d85f57d58493",
+      "filename": "fjord-morning.png",
+      "mimeType": "image/png",
+      "originalName": "fjord-morning.png",
+      "size": 53512
+    },
+    {
+      "id": "cb0ca206-af63-4039-857c-960f738e6c3c",
+      "filename": "island-evening.png",
+      "mimeType": "image/png",
+      "originalName": "island-evening.png",
+      "size": 55944
+    },
+    {
+      "id": "83e85a6d-bfbd-46b0-93d8-19facddd2787",
+      "filename": "slow-tide.mp4",
+      "mimeType": "video/mp4",
+      "originalName": "slow-tide.mp4",
+      "size": 280822
+    },
+    {
+      "id": "4af27449-e3a9-48bd-9919-529393f4bff8",
+      "filename": "woodland-path.png",
+      "mimeType": "image/png",
+      "originalName": "woodland-path.png",
+      "size": 67909
+    }
+  ],
+  "homePageId": "1a051add-64c4-481c-b489-237aa50ec186"
+}

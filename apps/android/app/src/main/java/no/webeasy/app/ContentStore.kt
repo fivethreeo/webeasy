@@ -49,8 +49,10 @@ class ContentStore(private val context: Context) :
             db.beginTransaction()
             try {
                 if (rows(db, "SELECT value FROM metadata WHERE key = ?", arrayOf("seeded")).length() == 0) {
-                    val seed = JSONObject(context.assets.open("website/content.json").bufferedReader().use { it.readText() })
-                    writeContent(db, seed)
+                    // An older unmarked database can still contain a user's site.
+                    if (listOf("pages", "news", "media", "metadata").all {
+                        rows(db, "SELECT 1 FROM $it LIMIT 1").length() == 0
+                    }) seedStarter(db)
                     db.execSQL("INSERT INTO metadata (key, value) VALUES (?, ?)", arrayOf("seeded", "1"))
                 }
                 db.setTransactionSuccessful()
@@ -61,6 +63,40 @@ class ContentStore(private val context: Context) :
     }
 
     override fun close() = synchronized(restoreLock) { super.close() }
+
+    private fun seedStarter(db: SQLiteDatabase) {
+        val seed = JSONObject(context.assets.open("website/starter/content.json").bufferedReader().use { it.readText() })
+        val media = seed.getJSONArray("media")
+        // Cover foreign keys require media rows before pages/news are inserted.
+        for (index in 0 until media.length()) {
+            val record = media.getJSONObject(index)
+            val filename = record.getString("filename")
+            val target = safeFile(mediaDirectory, filename)
+            val bytes = context.assets.open("website/starter/media/$filename").use { it.readBytes() }
+            check(bytes.size.toLong() == record.getLong("size")) { "Invalid starter media size." }
+            if (target.exists()) {
+                // A failed first launch may have copied files before its SQL rollback.
+                check(target.readBytes().contentEquals(bytes)) { "Starter media would replace an existing file." }
+            } else {
+                val staged = File.createTempFile("webeasy-starter-", ".tmp", context.cacheDir)
+                try {
+                    staged.writeBytes(bytes)
+                    check(staged.renameTo(target)) { "Cannot install starter media." }
+                } finally { staged.delete() }
+            }
+            insert(db, "media", mapOf("id" to record.getString("id"), "filename" to filename,
+                "mime_type" to record.getString("mimeType"), "original_name" to record.getString("originalName"),
+                "size" to bytes.size))
+        }
+        writeContent(db, seed)
+        val defaults = JSONObject(context.assets.open("website/starter/metadata.json").bufferedReader().use { it.readText() })
+        defaults.keys().forEach { key ->
+            require(key in setOf("template_source_index", "asset_overrides") ||
+                key.startsWith("template_source/") || key.startsWith("asset_chunk/"))
+            insert(db, "metadata", mapOf("key" to key, "value" to defaults.getString(key)))
+        }
+        CustomizationAssets.validate(assetFiles(), complete = true)
+    }
 
     private fun recoverInterruptedRestore() {
         val marker = File(context.filesDir, "webeasy-restore.json")

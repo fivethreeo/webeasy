@@ -96,6 +96,14 @@ jobs:
             apps/ios/Sources/DirectoryTools.swift apps/ios/Sources/HostingDirectory.swift \
             apps/ios/Tests/DirectoryToolsTests.swift -o "$RUNNER_TEMP/webeasy-directory-ios-tests"
           xcrun simctl spawn "$device" "$RUNNER_TEMP/webeasy-directory-ios-tests"
+          xcrun --sdk iphonesimulator swiftc -swift-version 6 \
+            -target "$(uname -m)-apple-ios17.0-simulator" \
+            -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            apps/ios/Sources/ContentError.swift apps/ios/Sources/CustomizationAssets.swift \
+            apps/ios/Sources/DirectoryTools.swift apps/ios/Sources/HostingDirectory.swift \
+            apps/ios/Sources/Catalog.swift apps/ios/Sources/ContentStore.swift \
+            apps/ios/Tests/StarterSiteTests.swift -o "$RUNNER_TEMP/webeasy-starter-ios-tests"
+          xcrun simctl spawn "$device" "$RUNNER_TEMP/webeasy-starter-ios-tests" "$GITHUB_WORKSPACE/apps/ios/Resources/Website"
       - run: brew install xcodegen
       - run: xcodegen generate
         working-directory: apps/ios

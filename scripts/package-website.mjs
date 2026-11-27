@@ -16,5 +16,6 @@ for (const relative of [
   await rm(destination, { recursive: true, force: true });
   await mkdir(path.dirname(destination), { recursive: true });
   await cp(source, destination, { recursive: true });
+  await cp(path.join(root, "shared/starter-site"), path.join(destination, "starter"), { recursive: true });
   console.log(`Packaged ${relative}`);
 }

@@ -11,13 +11,18 @@ final class ContentStore: @unchecked Sendable {
     private let queue = DispatchQueue(label: "no.webeasy.storage")
     private var database: OpaquePointer?
 
-    init() throws {
+    convenience init() throws {
         let files = FileManager.default
         let support = try files.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                    appropriateFor: nil, create: true).appendingPathComponent("Webeasy", isDirectory: true)
         guard let bundled = Bundle.main.url(forResource: "Website", withExtension: nil) else {
             throw ContentError.invalid("Website resources are unavailable.")
         }
+        try self.init(support: support, bundled: bundled)
+    }
+
+    init(support: URL, bundled: URL) throws {
+        let files = FileManager.default
         bundleRoot = bundled
         websiteRoot = support.appendingPathComponent("Website", isDirectory: true)
         mediaDirectory = websiteRoot.appendingPathComponent("media", isDirectory: true)
@@ -60,11 +65,11 @@ final class ContentStore: @unchecked Sendable {
                 }
                 if version < 4 { try execute("PRAGMA user_version = 4") }
                 if try rows("SELECT value FROM metadata WHERE key = ?", ["seeded"]).isEmpty {
-                    let data = try Data(contentsOf: bundled.appendingPathComponent("content.json"))
-                    guard let seed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                        throw ContentError.invalid("Invalid bundled content.")
+                    // Do not replace an older unmarked site, including its customizations.
+                    let occupied = try ["pages", "news", "media", "metadata"].contains {
+                        try !rows("SELECT 1 FROM \($0) LIMIT 1").isEmpty
                     }
-                    try writeContent(seed)
+                    if !occupied { try seedStarter() }
                     try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", ["seeded", "1"])
                 }
             }
@@ -76,6 +81,43 @@ final class ContentStore: @unchecked Sendable {
     }
 
     deinit { sqlite3_close(database) }
+
+    private func seedStarter() throws {
+        let root = bundleRoot.appendingPathComponent("starter")
+        let data = try Data(contentsOf: root.appendingPathComponent("content.json"))
+        guard let seed = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let media = seed["media"] as? [[String: Any]] else {
+            throw ContentError.invalid("Invalid bundled starter.")
+        }
+        // Media must exist before inserting pages/news with cover foreign keys.
+        for record in media {
+            let filename = try text(record, "filename", required: true)
+            let target = try DirectoryTools.safeFile(mediaDirectory, filename)
+            let source = try DirectoryTools.safeFile(root.appendingPathComponent("media"), filename)
+            let bytes = try Data(contentsOf: source)
+            guard record["size"] as? Int == bytes.count else { throw ContentError.invalid("Invalid starter media size.") }
+            if FileManager.default.fileExists(atPath: target.path) {
+                // Accept matching files left by a rolled-back initialization, never overwrite.
+                guard try Data(contentsOf: target) == bytes else {
+                    throw ContentError.invalid("Starter media would replace an existing file.")
+                }
+            } else { try bytes.write(to: target, options: .atomic) }
+            try execute("INSERT INTO media (id, filename, mime_type, original_name, size) VALUES (?, ?, ?, ?, ?)",
+                        [try identity(record), filename, try text(record, "mimeType", required: true),
+                         try text(record, "originalName", required: true), bytes.count])
+        }
+        try writeContent(seed)
+        let defaults = try JSONDecoder().decode([String: String].self,
+            from: Data(contentsOf: root.appendingPathComponent("metadata.json")))
+        for (key, value) in defaults {
+            guard ["template_source_index", "asset_overrides"].contains(key)
+                || key.hasPrefix("template_source/") || key.hasPrefix("asset_chunk/") else {
+                throw ContentError.invalid("Invalid starter customization.")
+            }
+            try execute("INSERT INTO metadata (key, value) VALUES (?, ?)", [key, value])
+        }
+        try CustomizationAssets.validate(assetFiles(), complete: true)
+    }
 
     func publishedSnapshot() throws -> Data? {
         try queue.sync {
