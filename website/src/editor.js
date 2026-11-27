@@ -62,7 +62,7 @@ function input(record, key, labelText, type = "text") {
   const field = document.createElement("input");
   field.type = type;
   field.value = record[key] ?? "";
-  field.required = key !== "heading" || record.asides !== undefined;
+  field.required = !["author", "subtitle"].includes(key) && (key !== "heading" || record.asides !== undefined);
   field.addEventListener("input", () => { record[key] = field.value; changed(); refreshLabels(); });
   label.append(field);
   return label;

@@ -150,6 +150,10 @@ test("landing cover has the menu above its jumbotron and an edge-to-edge square 
 
 test("optional page author and secondary title survive saving and preview as text", async ({ page }) => {
   await openEditor(page);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved locally to SQLite.");
+  expect(await page.evaluate(() => window.__savedProject.pages[0].author)).toBe("");
+  expect(await page.evaluate(() => window.__savedProject.pages[0].subtitle)).toBe("");
   await page.getByLabel("Author (optional)", { exact: true }).fill("<Author & Co>");
   await page.getByLabel("Secondary title (optional)", { exact: true }).fill("A secondary title");
   await page.getByRole("button", { name: "Save", exact: true }).click();
