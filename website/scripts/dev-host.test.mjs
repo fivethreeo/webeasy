@@ -2,14 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { mkdtemp, writeFile, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { devHostMiddleware } from "./dev-host.mjs";
 
-test("development uploads are served with range support but hidden files and escaping symlinks are not", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "webeasy-host-"));
-  const outside = await mkdtemp(path.join(tmpdir(), "webeasy-outside-"));
+test("development public uploads are served but sibling backups, hidden files and escaping symlinks are not", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "webeasy-host-"));
+  const directory = path.join(root, "public");
+  const outside = path.join(root, "backups");
+  await mkdir(directory);
+  await mkdir(outside);
   await writeFile(path.join(directory, "index.html"), "<h1>Uploaded page</h1>");
   await writeFile(path.join(directory, "clip.mp4"), "0123456789");
   await writeFile(path.join(directory, ".pending.upload"), "unpublished");
@@ -29,11 +32,12 @@ test("development uploads are served with range support but hidden files and esc
     assert.equal((await fetch(`${url}/host/clip.mp4`, { headers: { Range: "bytes=99-" } })).status, 416);
     assert.equal((await fetch(`${url}/host/.pending.upload`)).status, 403);
     assert.equal((await fetch(`${url}/host/escape.txt`)).status, 403);
+    assert.equal((await fetch(`${url}/host/backups/private.txt`)).status, 404);
+    assert.equal((await fetch(`${url}/host/%2e%2e/backups/private.txt`)).status, 404);
     assert.equal((await fetch(`${url}/host/`, { method: "POST" })).status, 405);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
-    await rm(directory, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import sys
+import tempfile
 
 from publish_store import load_connection
 
@@ -19,7 +20,7 @@ def configure(file, host, port):
         connection = {
             "protocol": "ftp", "host": host, "port": port,
             "username": "webeasy", "password": secrets.token_urlsafe(24),
-            "directory": "/",
+            "directory": "/public",
         }
         descriptor = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf8") as stream:
@@ -27,8 +28,19 @@ def configure(file, host, port):
             stream.write("\n")
     connection = load_connection(file)
     if (connection["protocol"] != "ftp" or connection["host"] != host
-            or connection["port"] != port or connection["directory"] != "/"):
+            or connection["port"] != port or connection["directory"] not in {"/", "/public"}):
         raise ValueError("Existing hosting.local.json is not this development host; it was not overwritten.")
+    if connection["directory"] == "/":
+        connection["directory"] = "/public"
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf8", dir=file.parent,
+                                         prefix=".hosting-local-", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(connection, stream, indent=2)
+            stream.write("\n")
+        try:
+            os.replace(temporary, file)
+        finally:
+            temporary.unlink(missing_ok=True)
     return connection
 
 
@@ -50,7 +62,13 @@ def main():
         if directory.is_symlink():
             raise ValueError("The development host root must not be a symlink.")
         directory.mkdir(exist_ok=True)
-        landing = directory / "index.html"
+        public = directory / "public"
+        backups = directory / "backups"
+        if public.is_symlink() or backups.is_symlink():
+            raise ValueError("Development public and backup directories must not be symlinks.")
+        public.mkdir(exist_ok=True)
+        backups.mkdir(exist_ok=True)
+        landing = public / "index.html"
         if not landing.exists():
             with landing.open("x", encoding="utf8") as stream:
                 stream.write("""<!doctype html>
@@ -74,6 +92,7 @@ def main():
         server.max_cons = 32
         server.max_cons_per_ip = 4
         print(f"Development FTP: {args.host}:{args.port}; root: {directory}", flush=True)
+        print("Website destination: /public; private backup directory: /backups.", flush=True)
         print("Credentials are in the gitignored hosting.local.json; plain FTP is for trusted LAN testing only.",
               flush=True)
         server.serve_forever()

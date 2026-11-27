@@ -441,17 +441,23 @@ and HTTP port `4173`; change them with `HOST`, `FTP_PORT`, and `RSBUILD_PORT`.
 `setup` installs npm dependencies and the development/publishing Python packages
 in `.venv-dev-host`.
 
-FTP is jailed to the gitignored `dev-host/` directory. Uploads are served at
+FTP is jailed to the gitignored `dev-host/` directory. The website destination is
+`/public`, and only `dev-host/public/` is served at
 `http://192.168.1.2:4173/host/`, including video range requests and APK/IPA downloads.
-The app-store subdirectory is `/host/store/`. Hidden staging files and symlinks
-outside the host root are not served. These development files are never copied
+The app-store subdirectory is `/host/store/` (FTP `/public/store`).
+Use `/backups` for private backups; `dev-host/backups/` and other siblings of
+`public/` are not served over HTTP. Hidden staging files and symlinks
+outside the public directory are not served. These development files are never copied
 into production website/native bundles.
 
 The FTP runner creates a random password in gitignored `website/hosting.local.json`
 with restrictive permissions if the file does not exist. It never overwrites an
 existing configuration for another host. Open `/provision.html` on this machine or
 another private-LAN device
-to scan its QR. Anyone on that LAN can view the credential QR. Public-network
+to scan its QR. Existing development configurations with destination `/` are
+updated to `/public` without changing credentials. Move previously uploaded
+public files into `dev-host/public/`, then reimport the QR in existing apps to
+update their saved destination. Anyone on that LAN can view the credential QR. Public-network
 clients are rejected using the socket address, not forwarded headers; same-origin
 and Host checks still apply. Plain FTP is only for trusted LAN testing; do not
 expose this development server to the internet.

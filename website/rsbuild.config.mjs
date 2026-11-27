@@ -71,7 +71,7 @@ export default defineConfig(({ env }) => {
             fileURLToPath(new URL("./hosting.local.json", import.meta.url)),
           ));
           server.middlewares.use(devHostMiddleware(
-            fileURLToPath(new URL("../dev-host/", import.meta.url)),
+            fileURLToPath(new URL("../dev-host/public/", import.meta.url)),
           ));
         }
       },
