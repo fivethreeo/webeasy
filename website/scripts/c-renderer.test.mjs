@@ -106,6 +106,30 @@ test("landing covers contain one image and a title/subtitle jumbotron; regular p
   assert.equal(readingDocument.querySelector(".page-byline time").getAttribute("datetime"), page.date);
 });
 
+test("news listings omit cover images while full articles retain them", async () => {
+  const catalog = await loadCatalog(path.join(root, "website/src"));
+  const project = await loadProject(path.join(root, "website/src"));
+  const item = project.news[0];
+  item.coverMediaId = "news-cover";
+  project.media.push({ id: "news-cover", filename: "news-cover.png", mimeType: "image/png", originalName: "News cover.png", size: 1 });
+  const input = { project, catalog };
+  const compiled = compileRequest(input);
+  assert.deepEqual(native(input, "compile").files, compiled.files);
+  assert.deepEqual(renderSite(project, catalog), compiled.files);
+  const listing = new JSDOM(compiled.files.find(file => file.path === "news/index.html").html).window.document;
+  assert.ok(listing.querySelector(".news-summary"));
+  assert.equal(listing.querySelector(".news-summary .cover-image"), null);
+  const article = new JSDOM(compiled.files.find(file => file.path === `news/${item.date}/${item.slug}/index.html`).html).window.document;
+  assert.ok(article.querySelector('.cover-image img[src="media/news-cover.png"]'));
+  project.pages = [];
+  project.homePageId = null;
+  const newsOnly = compileRequest(input);
+  assert.deepEqual(native(input, "compile").files, newsOnly.files);
+  const homepage = new JSDOM(newsOnly.files.find(file => file.path === "index.html").html).window.document;
+  assert.ok(homepage.querySelector(".news-summary"));
+  assert.equal(homepage.querySelector(".news-summary .cover-image"), null);
+});
+
 test("the full C pipeline matches existing normalization, preparation, media and rendered websites", async () => {
   const catalog = await loadCatalog(path.join(root, "website/src"));
   const original = JSON.parse(await readFile(path.join(root, "website/src/content.json"), "utf8"));
