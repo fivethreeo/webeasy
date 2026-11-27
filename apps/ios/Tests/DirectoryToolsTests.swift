@@ -87,10 +87,16 @@ struct DirectoryToolsTests {
             } catch {}
         }
         try files.createSymbolicLink(at: selected.appendingPathComponent("link"), withDestinationURL: outside)
-        do {
-            _ = try DirectoryTools.safeFile(selected, "link/file.txt")
-            preconditionFailure("Symlink escape into a shared-prefix sibling accepted.")
-        } catch {}
+        for path in ["link/file.txt", "link/missing/file.txt"] {
+            do {
+                _ = try DirectoryTools.safeFile(selected, path)
+                preconditionFailure("Symlink escape into a shared-prefix sibling accepted.")
+            } catch {}
+        }
+        let nested = selected.appendingPathComponent("nested", isDirectory: true)
+        try files.createDirectory(at: nested, withIntermediateDirectories: false)
+        try files.createSymbolicLink(at: selected.appendingPathComponent("inside"), withDestinationURL: nested)
+        _ = try DirectoryTools.safeFile(selected, "inside/new-file.txt")
     }
 
     static func remote(_ root: URL, identity: String = "fixture") -> HostingDirectory {

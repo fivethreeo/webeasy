@@ -107,12 +107,17 @@ enum DirectoryTools {
     static func safeFile(_ root: URL, _ path: String) throws -> URL {
         try validatePath(path)
         let target = root.appendingPathComponent(path)
-        // Compare resolved components, not slash-sensitive URL strings.
-        let rootComponents = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        let targetComponents = target.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        guard targetComponents.count > rootComponents.count,
-              targetComponents.starts(with: rootComponents) else {
-            throw ContentError.invalid("Directory path escapes the selected folder.")
+        var resolved = root.resolvingSymlinksInPath().standardizedFileURL
+        let rootComponents = resolved.pathComponents
+        // Resolve each ancestor: resolving a whole nonexistent destination can
+        // leave an existing parent symlink unresolved on Apple Foundation.
+        for component in path.split(separator: "/") {
+            resolved = resolved.appendingPathComponent(String(component)).resolvingSymlinksInPath().standardizedFileURL
+            let components = resolved.pathComponents
+            guard components.count > rootComponents.count,
+                  components.starts(with: rootComponents) else {
+                throw ContentError.invalid("Directory path escapes the selected folder.")
+            }
         }
         return target
     }
