@@ -10,6 +10,9 @@
 #define MAX_REQUEST (64u * 1024u * 1024u)
 #define MAX_COMPOSITION 64
 
+/* Mustach interprets template syntax; these callbacks supply our JSON values,
+ * resolve partials and collect HTML. It never opens files: all template sources
+ * arrive in the request, including user customizations. */
 struct renderer {
     const cJSON *partials;
     const cJSON *raw_slots;
@@ -27,6 +30,8 @@ struct context {
     size_t capacity;
 };
 
+/* Keep the first rendering failure in the request-local state; negative user
+ * error codes stop Mustach, while the public API returns a readable JSON error. */
 static int fail(struct renderer *renderer, const char *message, const char *name)
 {
     snprintf(renderer->error, sizeof renderer->error, "%s%s", message, name ? name : "");
@@ -35,6 +40,8 @@ static int fail(struct renderer *renderer, const char *message, const char *name
 
 static int append(struct context *context, const char *text, size_t size)
 {
+    /* Grow geometrically, but bound the document before adding bytes. This
+     * avoids quadratic concatenation and unbounded custom-template output. */
     if (size > MAX_OUTPUT - context->size)
         return fail(context->renderer, "Rendered document is too large.", NULL);
     size_t needed = context->size + size + 1;
@@ -56,6 +63,8 @@ static int emit(void *closure, const char *text, size_t size, int escape, FILE *
 {
     (void)file;
     struct context *context = closure;
+    /* Normal {{fields}} escape HTML metacharacters. Triple-brace fields are
+     * allowed separately by put(), only for the trusted composition slots. */
     if (!escape) return append(context, text, size);
     for (size_t index = 0, start = 0; index <= size; index++) {
         const char *entity = NULL;
@@ -80,6 +89,8 @@ static int emit(void *closure, const char *text, size_t size, int escape, FILE *
 
 static const cJSON *lookup(struct context *context, const char *name)
 {
+    /* A section adds a scope. Resolve a dotted name in the nearest matching
+     * scope, falling back to its parents; {{.}} means the current array item. */
     if (!strcmp(name, ".")) return context->values[context->depth];
     char key[MUSTACH_MAX_LENGTH + 1];
     const char *dot = strchr(name, '.');
@@ -94,6 +105,7 @@ static const cJSON *lookup(struct context *context, const char *name)
         name = dot + 1;
         dot = strchr(name, '.');
         length = dot ? (size_t)(dot - name) : strlen(name);
+        if (length > MUSTACH_MAX_LENGTH) return NULL;
         memcpy(key, name, length);
         key[length] = 0;
         value = cJSON_GetObjectItemCaseSensitive(value, key);
@@ -105,6 +117,8 @@ static int put(void *closure, const char *name, int escape, FILE *file)
 {
     struct context *context = closure;
     if (!escape) {
+        /* Templates cannot make arbitrary fields raw by using {{{title}}}.
+         * Only the explicit rawSlots allow-list bypasses HTML escaping. */
         const cJSON *slot;
         int allowed = 0;
         cJSON_ArrayForEach(slot, context->renderer->raw_slots)
@@ -128,6 +142,8 @@ static int put(void *closure, const char *name, int escape, FILE *file)
 
 static int enter(void *closure, const char *name)
 {
+    /* A false/empty section is skipped. Arrays start at the first item; objects
+     * and scalars become a single new scope until Mustach calls leave(). */
     struct context *context = closure;
     const cJSON *value = lookup(context, name);
     if (!value || cJSON_IsNull(value) || cJSON_IsFalse(value) ||
@@ -143,6 +159,8 @@ static int enter(void *closure, const char *name)
 
 static int next(void *closure)
 {
+    /* Mustach asks for the next iteration. cJSON keeps array items in a linked
+     * list, so moving to the next item needs no copying or extra allocation. */
     struct context *context = closure;
     if (!context->array[context->depth] || !context->values[context->depth]->next) return 0;
     context->values[context->depth] = context->values[context->depth]->next;
@@ -165,6 +183,8 @@ static void release_partial(const char *value, void *closure)
 
 static int partial(void *closure, const char *name, struct mustach_sbuf *buffer)
 {
+    /* Partials borrow their template strings from the request. The release
+     * callback balances nesting, not memory ownership, even for nested partials. */
     struct context *context = closure;
     if (context->partial_depth >= 32)
         return fail(context->renderer, "Invalid template: partial nesting is too deep.", NULL);
@@ -186,6 +206,8 @@ static char *render(struct renderer *renderer, const char *name, const cJSON *va
         return NULL;
     }
     struct context context = { .renderer = renderer, .values = { values } };
+    /* One independent context per render keeps its scope stack and output local.
+     * Extensions stay off, so template behavior is the same on C and WASM. */
     const struct mustach_itf interface = {
         .put = put, .enter = enter, .next = next, .leave = leave, .partial = partial, .emit = emit,
     };
@@ -203,7 +225,10 @@ static char *render(struct renderer *renderer, const char *name, const cJSON *va
     return context.output;
 }
 
-/* Deferred renders preserve legacy content slots while also exposing structured data. */
+/* Preparation builds objects like {$render:"body", values:{...}} instead of
+ * concatenating HTML. Expand children first, then replace each such object with
+ * its rendered string. Existing {{{content}}} slots therefore still work, while
+ * custom templates can also read the surrounding structured page/section data. */
 static int expand(struct renderer *renderer, cJSON *parent, int depth)
 {
     if (depth > MAX_COMPOSITION) return fail(renderer, "Template composition is too deep.", NULL);
@@ -237,6 +262,8 @@ static int expand(struct renderer *renderer, cJSON *parent, int depth)
 
 char *webeasy_render(const char *request)
 {
+    /* Parse a private copy: expanding deferred compositions mutates this tree,
+     * never the caller's project or catalog. Each document yields {path,html}. */
     struct renderer renderer = {0};
     cJSON *input = NULL, *output = cJSON_CreateObject(), *files = cJSON_CreateArray();
     if (!output || !files) goto cleanup;
@@ -282,6 +309,8 @@ error:
     cJSON_AddStringToObject(output, "error", *renderer.error ? renderer.error : "Cannot render website.");
 cleanup:
     ;
+    /* All intermediate trees are released here, including partial failures.
+     * Only the serialized result crosses the Swift/JNI/WASM boundary. */
     char *result = output ? cJSON_PrintUnformatted(output) : NULL;
     cJSON_Delete(files);
     cJSON_Delete(output);

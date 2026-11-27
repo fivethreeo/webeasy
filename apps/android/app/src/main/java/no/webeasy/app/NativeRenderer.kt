@@ -7,6 +7,22 @@ internal object NativeRenderer {
     private val library by lazy { System.loadLibrary("webeasy_renderer") }
 
     private external fun renderBytes(request: ByteArray): ByteArray
+    private external fun generateBytes(request: ByteArray, compile: Boolean): ByteArray
+
+    // JNI transfers UTF-8 bytes, not Java's modified UTF-8. Project text reaches
+    // the same C validator/sanitizer/compiler used by Swift and browser WASM.
+    fun generate(input: JSONObject, compile: Boolean): JSONObject {
+        library
+        val response = JSONObject(generateBytes(input.toString().toByteArray(Charsets.UTF_8), compile).toString(Charsets.UTF_8))
+        require(!response.has("error")) { response.optString("error", "Cannot generate content.") }
+        require(response.optJSONObject("project") != null) { "Invalid renderer response." }
+        if (compile) {
+            files(response)
+            val media = response.optJSONArray("referencedMedia") ?: error("Invalid referenced media.")
+            for (index in 0 until media.length()) require(media.opt(index) is String) { "Invalid referenced media." }
+        }
+        return response
+    }
 
     fun render(request: JSONObject): JSONArray {
         library

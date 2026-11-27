@@ -128,11 +128,18 @@ editor modes. Every catalog entry can be opened to read/select its current sourc
 and preview its example, including loaded server overrides. Loading server
 templates remains an Advanced-mode action.
 
-The engine is Mustach 1.2.10 (0BSD) with cJSON 1.7.19 (MIT), vendored under
+The engine is Mustach 1.2.10 (0BSD) with cJSON 1.7.19 (MIT), Lexbor 2.5.0
+(Apache-2.0 HTML5/URL parsing) and utf8proc 2.10.0 (MIT/Unicode normalization), vendored under
 `shared/renderer/vendor/` with their original notices. Builds also package
 `renderer-licenses.txt` into both apps. The same C implementation runs through
 JNI on Android, directly from Swift on iOS, and as WebAssembly in the browser and
 Node build. There is no filesystem lookup or executable template code.
+The pinned dependency sources and platform choices are recorded in
+`shared/renderer/html-dependencies.json`. HTML parsing is limited to 2 MiB per
+field, 100,000 tokens/nodes and depth 128; invalid UTF-8 or resource failures
+return errors, never unsanitized fallback. Embedded NUL characters are rejected
+rather than silently truncating cJSON strings. HTML attribute escaping may become
+stricter while preserving the same parsed value.
 
 Use `{{field}}` for escaped text/attributes, `{{#items}}...{{/items}}` for loops
 or conditions, `{{^items}}...{{/items}}` for empty/false cases, and `{{>name}}` for
@@ -175,9 +182,31 @@ The generated `catalog.json` includes HTML source, example data, and preview pat
 for both native clients and future editing/generation code. All previews use the
 same bundled CSS/JS and media, with no CDN dependencies.
 
-Native publishing still uses the shared JavaScript sanitizer/normalizer to
-prepare validated template data; HTML generation itself is C. The helper
-WebView therefore remains for normalization and other existing utilities.
+Native save, preview, export and publishing send project JSON directly to shared
+C on a worker thread. C validates and normalizes the project, sanitizes rich HTML,
+prepares routes/navigation/template contexts, renders HTML and collects media
+references. No JavaScript or WebView participates in that generation path.
+The helper WebView remains for other utilities such as change comparisons,
+connection/settings parsing and template examples; rich editing and website
+display also still use WebViews.
+
+The commented implementation is split by responsibility:
+
+```text
+NativeRenderer.generate()
+  -> webeasy_normalize() [save] / webeasy_compile() [preview/export/publish]
+     -> site.c: normalize() -> prepare()
+        -> html.c: HTML sanitization, link/media rules, Unicode heading IDs
+        -> renderer.c: expand() -> render() -> Mustach callbacks
+     -> site.c: referenced_media()
+  -> native SQLite save / preview / ZIP export / hosting upload
+```
+
+`webeasy_render()` is the lower-level template API; `webeasy_prepare()` exposes
+the intermediate render request for tests. All public APIs return owned UTF-8
+JSON (including `{error}` on failure), released with `webeasy_free()`. The same
+full pipeline is exported to WASM for the browser generator. The browser editor's
+existing JS model remains as a parity reference and for its editing operations.
 `npm run build:renderer` rebuilds the ignored WebAssembly module after C changes.
 The editor/helper CSP allows WebAssembly compilation without allowing JavaScript
 `eval`; published pages retain their existing stricter CSP.
@@ -217,8 +246,9 @@ cd apps/android
 
 Set `ANDROID_HOME` or provide `local.properties` with your SDK location.
 The Android `preBuild` task rebuilds and packages the website automatically.
-Generated pages are rendered by the shared C library through JNI on a worker;
-the helper WebView still normalizes and sanitizes content before rendering.
+Project normalization and complete website generation run in the shared C
+library through JNI on a worker, without evaluating JavaScript in the helper
+WebView. A serialized draft snapshot keeps worker execution isolated from edits.
 The APK is generated in `app/build/outputs/apk/debug/`.
 Previews use AndroidX WebKit's local HTTPS asset loader, not unrestricted file URLs.
 

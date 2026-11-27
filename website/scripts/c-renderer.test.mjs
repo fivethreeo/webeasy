@@ -5,25 +5,27 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-import { renderRequest } from "../src/c-renderer.js";
-import { prepareSite, renderSite } from "../src/content-model.js";
+import { renderRequest, normalizeRequest, prepareRequest, compileRequest } from "../src/c-renderer.js";
+import { normalizeProject, prepareSite, renderSite, referencedMedia } from "../src/content-model.js";
 import { loadCatalog } from "./catalog.mjs";
-import { loadProject } from "./content.mjs";
+import { loadProject, sanitizeRichText, sanitizeShortText, contentWindow } from "./content.mjs";
+import { readFile } from "node:fs/promises";
 import { loadTemplateSources, templateSources } from "../src/template-sources.js";
+import { rendererSources, rendererFlags } from "../../scripts/renderer-sources.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const source = path.join(root, "shared/renderer");
 const binary = path.join(root, "dist/renderer/native-test");
 await mkdir(path.dirname(binary), { recursive: true });
 const build = spawnSync(process.env.CC || "cc", [
-  "-std=c11", "-DNO_OPEN_MEMSTREAM", "-Wall", "-Wextra", "-Werror",
-  ...["test-main.c", "renderer.c", "vendor/mustach/mustach.c", "vendor/cjson/cJSON.c"].map((file) => path.join(source, file)),
+  ...rendererFlags, "-Wall", "-Wextra",
+  path.join(source, "test-main.c"), ...rendererSources(),
   "-lm", "-o", binary,
 ], { encoding: "utf8" });
 assert.equal(build.status, 0, build.error?.message ?? build.stdout + build.stderr);
 
-function native(input) {
-  const result = spawnSync(binary, [], {
+function native(input, operation) {
+  const result = spawnSync(binary, operation ? [operation] : [], {
     input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8", maxBuffer: 32 * 1024 * 1024,
   });
   assert.equal(result.status, 0, result.stderr);
@@ -74,6 +76,70 @@ test("native C and WASM produce identical complete websites without changing pro
   const input = prepareSite(project, catalog, { publicPathPrefix: "/host/site/" });
   assert.deepEqual(native(input).files, renderSite(project, catalog, { publicPathPrefix: "/host/site/" }));
   assert.equal(JSON.stringify(project), before);
+});
+
+test("the full C pipeline matches existing normalization, preparation, media and rendered websites", async () => {
+  const catalog = await loadCatalog(path.join(root, "website/src"));
+  const original = JSON.parse(await readFile(path.join(root, "website/src/content.json"), "utf8"));
+  for (const customize of [
+    () => {},
+    (project) => {
+      project.homePageId = project.pages[0].children[0].id;
+      project.pages[0].templateId = "landing-page";
+      project.pages[0].children[0].templateId = "reading-page";
+      project.pages[0].sections.push({ id: "unicode-section", heading: "Héllo & World!", subheading: "  <Ø>  ",
+        content: 'Loose <b>bold</b>!<p></p><video src="media/clip.mp4" poster="media/poster.jpg"></video>', asides: [] });
+    },
+    (project) => { project.pages = []; project.homePageId = null; project.news = []; },
+  ]) {
+    const project = structuredClone(original);
+    customize(project);
+    const before = JSON.stringify(project);
+    const expected = normalizeProject(project, sanitizeRichText, sanitizeShortText);
+    assert.deepEqual(native(project, "normalize").project, expected);
+    assert.deepEqual(normalizeRequest(project).project, expected);
+    const input = { project, catalog, publicPathPrefix: "/host/site/" };
+    const request = prepareSite(expected, catalog, { publicPathPrefix: input.publicPathPrefix });
+    assert.deepEqual(native(input, "prepare").renderRequest, request);
+    assert.deepEqual(prepareRequest(input).renderRequest, request);
+    const compiled = native(input, "compile");
+    assert.deepEqual(compiled.project, expected);
+    assert.deepEqual(compiled.files, renderSite(expected, catalog, { publicPathPrefix: input.publicPathPrefix }));
+    assert.deepEqual(compiled.referencedMedia, referencedMedia(expected, contentWindow));
+    assert.deepEqual(compileRequest(input), compiled);
+    assert.equal(JSON.stringify(project), before);
+  }
+});
+
+test("full C generation rejects invalid project data and publishing paths before producing files", async () => {
+  const catalog = await loadCatalog(path.join(root, "website/src"));
+  const original = JSON.parse(await readFile(path.join(root, "website/src/content.json"), "utf8"));
+  for (const change of [
+    (project) => { project.pages[0].date = "2026-02-31"; },
+    (project) => { project.pages[0].slug = "../private"; },
+    (project) => { project.pages[0].slug = "news"; },
+    (project) => { project.news.push(structuredClone(project.news[0])); },
+    (project) => { project.pages[0].sections[0].asides[0].id = project.pages[0].id; },
+    (project) => { project.pages[0].templateId = "news"; },
+    (project) => { project.homePageId = "missing"; },
+    (project) => { project.pages[0].title = "Before\u0000after"; },
+    (project) => { project.media = [{ id: "bad-media", filename: "../secret.jpg", mimeType: "image/jpeg", originalName: "", size: 10 }]; },
+  ]) {
+    const project = structuredClone(original);
+    change(project);
+    const input = { project, catalog };
+    assert.ok(native(input, "compile").error);
+    assert.throws(() => compileRequest(input));
+  }
+  for (const publicPathPrefix of ["../private", "/site//private/", "https://example.com/", "/site/?x=1", 17]) {
+    const input = { project: original, catalog, publicPathPrefix };
+    assert.ok(native(input, "compile").error);
+    assert.throws(() => compileRequest(input));
+  }
+  assert.ok(native("{invalid", "normalize").error);
+  const literal = structuredClone(original);
+  literal.pages[0].title = "Literal \\u0000 stays text";
+  assert.equal(normalizeRequest(literal).project.pages[0].title, literal.pages[0].title);
 });
 
 test("templates control navigation, footer, headings, sidebars, covers and news without renderer HTML", async () => {

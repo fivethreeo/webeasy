@@ -294,21 +294,11 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             if let publicPathPrefix { input["publicPathPrefix"] = publicPathPrefix }
         }
         let data = try JSONSerialization.data(withJSONObject: input)
-        let serialized = String(decoding: data, as: UTF8.self)
-        let argument = try JSONSerialization.data(withJSONObject: serialized, options: .fragmentsAllowed)
-        let value = try await generator.evaluateJavaScript(
-            "window.WebeasyGenerator.\(compile ? "prepare" : "normalize")(\(String(decoding: argument, as: UTF8.self)))")
-        guard let result = value as? String, let data = result.data(using: .utf8),
-              let output = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        // Capture immutable JSON on the UI thread; the complete C pipeline runs
+        // off it. Saving/previewing/exporting/publishing no longer executes JS.
+        let rendered = try await Task.detached { try NativeRenderer.generate(data, compile: compile) }.value
+        guard let output = try JSONSerialization.jsonObject(with: rendered) as? [String: Any] else {
             throw ContentError.invalid("Cannot generate website content.")
-        }
-        if let error = output["error"] as? String { throw ContentError.invalid(error) }
-        if compile {
-            let rendered = try await Task.detached { try NativeRenderer.compile(data) }.value
-            guard let output = try JSONSerialization.jsonObject(with: rendered) as? [String: Any] else {
-                throw ContentError.invalid("Invalid rendered website.")
-            }
-            return output
         }
         return output
     }

@@ -49,6 +49,35 @@ struct NativeRendererTests {
             _ = try NativeRenderer.compile(malformed)
             preconditionFailure("Malformed prepared file was accepted.")
         } catch ContentError.invalid {}
+        // Exercise the complete Swift -> C path with real bundled project and
+        // catalog fixtures. Concurrent workers must not share mutable C state.
+        let project = try Data(contentsOf: URL(fileURLWithPath: "website/src/content.json"))
+        let catalog = try JSONSerialization.jsonObject(with:
+            Data(contentsOf: URL(fileURLWithPath: "apps/ios/Resources/Website/catalog.json")))
+        let fullInput = try JSONSerialization.data(withJSONObject: [
+            "project": try JSONSerialization.jsonObject(with: project), "catalog": catalog,
+            "publicPathPrefix": "/host/site/"
+        ])
+        let expected = try NativeRenderer.generate(fullInput, compile: true)
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            for _ in 0..<8 {
+                group.addTask { try NativeRenderer.generate(fullInput, compile: true) }
+            }
+            for try await output in group {
+                precondition(output == expected)
+            }
+        }
+        let normalized = try JSONSerialization.jsonObject(with:
+            NativeRenderer.generate(project, compile: false)) as! [String: Any]
+        precondition(normalized["project"] is [String: Any])
+        let generated = try JSONSerialization.jsonObject(with: expected) as! [String: Any]
+        let generatedFiles = generated["files"] as! [[String: String]]
+        precondition(generatedFiles.contains { $0["path"] == "index.html" && $0["html"]?.contains("Navigation") == true })
+        precondition(generated["renderRequest"] == nil)
+        do {
+            _ = try NativeRenderer.generate(Data("{}".utf8), compile: false)
+            preconditionFailure("Invalid project was accepted by C normalization.")
+        } catch ContentError.invalid {}
         print("Native Swift/C renderer tests passed: UTF-8, loops, worker isolation, file order, metadata and errors.")
     }
 }

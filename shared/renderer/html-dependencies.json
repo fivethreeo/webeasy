@@ -1,0 +1,33 @@
+{
+  "language": "c11",
+  "upstreamPins": {
+    "lexbor": {"version": "2.5.0", "commit": "7fb22cf5664a331d7c24b113489e566767c9c25a"},
+    "utf8proc": {"version": "2.10.0", "commit": "a1b99daa2a3393884220264c927a48ba1251a9c6"}
+  },
+  "sources": ["html.c", "vendor/utf8proc/utf8proc.c"],
+  "recursiveSourceDirectories": [
+    "vendor/lexbor/source/lexbor/core",
+    "vendor/lexbor/source/lexbor/dom",
+    "vendor/lexbor/source/lexbor/html",
+    "vendor/lexbor/source/lexbor/ns",
+    "vendor/lexbor/source/lexbor/tag",
+    "vendor/lexbor/source/lexbor/url",
+    "vendor/lexbor/source/lexbor/unicode",
+    "vendor/lexbor/source/lexbor/encoding",
+    "vendor/lexbor/source/lexbor/punycode"
+  ],
+  "platformSources": {
+    "posix": ["vendor/lexbor/source/lexbor/ports/posix/lexbor/core/memory.c"],
+    "windows": ["vendor/lexbor/source/lexbor/ports/windows_nt/lexbor/core/memory.c"]
+  },
+  "includeDirectories": [".", "vendor/lexbor/source", "vendor/utf8proc"],
+  "definitions": ["LEXBOR_STATIC", "UTF8PROC_STATIC"],
+  "libraries": [],
+  "notes": [
+    "Paths are relative to shared/renderer. Add existing cJSON.c once.",
+    "Select posix for Linux, Android, Apple platforms and Emscripten.",
+    "Do not compile utf8proc_data.c separately; utf8proc.c includes it.",
+    "Do not glob all Lexbor modules or all ports: this list intentionally omits unused modules and duplicate platform implementations.",
+    "No threads, filesystem or performance-counter sources are needed."
+  ]
+}

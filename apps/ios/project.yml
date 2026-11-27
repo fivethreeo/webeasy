@@ -22,8 +22,23 @@ targets:
       - Sources
       - path: ../../shared/renderer/renderer.c
       - path: ../../shared/renderer/renderer.h
+      - path: ../../shared/renderer/site.c
+      - path: ../../shared/renderer/site.h
+      - path: ../../shared/renderer/html.c
+      - path: ../../shared/renderer/html.h
       - path: ../../shared/renderer/vendor/mustach/mustach.c
       - path: ../../shared/renderer/vendor/cjson/cJSON.c
+      - path: ../../shared/renderer/vendor/utf8proc/utf8proc.c
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/core
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/dom
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/html
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/ns
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/tag
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/url
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/unicode
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/encoding
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/punycode
+      - path: ../../shared/renderer/vendor/lexbor/source/lexbor/ports/posix/lexbor/core/memory.c
       - path: Resources/Website
         type: folder
         buildPhase: resources
@@ -43,11 +58,15 @@ targets:
         GCC_PREPROCESSOR_DEFINITIONS:
           - "$(inherited)"
           - NO_OPEN_MEMSTREAM
+          - LEXBOR_STATIC
+          - UTF8PROC_STATIC
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(SRCROOT)/../../shared/renderer"
           - "$(SRCROOT)/../../shared/renderer/vendor/mustach"
           - "$(SRCROOT)/../../shared/renderer/vendor/cjson"
+          - "$(SRCROOT)/../../shared/renderer/vendor/utf8proc"
+          - "$(SRCROOT)/../../shared/renderer/vendor/lexbor/source"
         MARKETING_VERSION: "0.1.25"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES

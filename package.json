@@ -7,7 +7,7 @@
     "build:renderer": "node scripts/build-renderer.mjs",
     "build": "npm run build --workspace website",
     "package:website": "node scripts/build-ui-locales.mjs && npm run build && node scripts/package-website.mjs",
-    "test": "node scripts/build-ui-locales.mjs && npm run build:renderer && npm run test --workspace website && node --test scripts/package-website.test.mjs && python3 -m unittest discover -s scripts -p 'test_*.py'"
+    "test": "node scripts/build-ui-locales.mjs && npm run build:renderer && npm run test --workspace website && node --test shared/renderer/test-html.mjs scripts/package-website.test.mjs && python3 -m unittest discover -s scripts -p 'test_*.py'"
   },
   "engines": {
     "node": ">=22"

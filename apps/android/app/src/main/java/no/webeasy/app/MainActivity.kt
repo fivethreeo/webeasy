@@ -1043,56 +1043,51 @@ class MainActivity : ComponentActivity() {
         if (publish && destination == null) { busy = false; status = "Import your hosting setup QR first."; return }
         val input = if (compile) JSONObject().put("project", project).put("catalog", catalog) else project!!
         if (compile && destination != null) input.put("publicPathPrefix", destination.optString("publicPathPrefix"))
-        generator.evaluateJavascript("window.WebeasyGenerator.${if (compile) "prepare" else "normalize"}(${JSONObject.quote(input.toString())})") { serialized ->
-            val output = runCatching { JSONObject(JSONTokener(serialized).nextValue() as String) }
-            if (output.isFailure || output.getOrNull()?.has("error") == true) {
-                status = output.getOrNull()?.optString("error") ?: "Cannot generate content."; busy = false
-                return@evaluateJavascript
-            }
-            val prepared = output.getOrThrow()
-            worker.execute {
-                runCatching {
-                    val result = if (compile) NativeRenderer.compile(prepared) else prepared
-                    if (!compile || export || publish) {
-                        store.save(result.getJSONObject("project"))
-                        runOnUiThread {
-                            drafts.markSaved(savedSnapshot)
-                            automaticSlugs.removeAll(savedSnapshot.records.keys)
-                            savedContent = result.getJSONObject("project").toString()
-                        }
+        // Freeze the draft before leaving the UI thread. C does all generation;
+        // the worker never consults the hidden utility WebView or a live draft.
+        val serializedInput = input.toString()
+        worker.execute {
+            runCatching {
+                val result = NativeRenderer.generate(JSONObject(serializedInput), compile)
+                if (!compile || export || publish) {
+                    store.save(result.getJSONObject("project"))
+                    runOnUiThread {
+                        drafts.markSaved(savedSnapshot)
+                        automaticSlugs.removeAll(savedSnapshot.records.keys)
+                        savedContent = result.getJSONObject("project").toString()
                     }
-                    if (!compile) null else if (publish) {
-                        val directory = store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
-                        try {
-                            SitePublisher.publish(destination!!, directory)
-                            try { store.savePublishedSnapshot(result.getJSONObject("project")) }
-                            catch (error: Exception) { throw IllegalStateException("Website published, but its change snapshot could not be saved.", error) }
-                            runOnUiThread { publishedContent = result.getJSONObject("project").toString() }
-                        }
-                        finally { directory.deleteRecursively() }
-                        null
-                    } else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
-                    else store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
-                }.fold(onSuccess = { file -> runOnUiThread {
-                    busy = false
-                    if (publish) status = if (savedRevision == revision) "Website published." else "Published snapshot excludes newer edits."
-                    else if (!compile) {
-                        status = if (savedRevision == revision) "Saved locally to SQLite." else "More recent changes remain unsaved."
-                        if (savedRevision == revision) afterSave?.invoke()
+                }
+                if (!compile) null else if (publish) {
+                    val directory = store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                    try {
+                        SitePublisher.publish(destination!!, directory)
+                        try { store.savePublishedSnapshot(result.getJSONObject("project")) }
+                        catch (error: Exception) { throw IllegalStateException("Website published, but its change snapshot could not be saved.", error) }
+                        runOnUiThread { publishedContent = result.getJSONObject("project").toString() }
                     }
-                    else if (export && file != null) {
-                        val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
-                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                            type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }, getString(R.string.share_website)))
-                        status = "Website snapshot ready to share."
-                    } else if (file != null) screens.add(Screen("preview", url = "$base/preview/${path ?: "index.html"}", directory = file))
-                } }, onFailure = { runOnUiThread {
-                    busy = false
-                    if (it is HostKeyApproval) { hostKeyForTemplates = false; pendingHostKey = it; status = "Confirm the SFTP server key before publishing." }
-                    else status = it.message ?: "The operation failed."
-                } })
-            }
+                    finally { directory.deleteRecursively() }
+                    null
+                } else if (export) store.exportSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+                else store.prepareSite(result.getJSONArray("files"), result.getJSONArray("referencedMedia"))
+            }.fold(onSuccess = { file -> runOnUiThread {
+                busy = false
+                if (publish) status = if (savedRevision == revision) "Website published." else "Published snapshot excludes newer edits."
+                else if (!compile) {
+                    status = if (savedRevision == revision) "Saved locally to SQLite." else "More recent changes remain unsaved."
+                    if (savedRevision == revision) afterSave?.invoke()
+                }
+                else if (export && file != null) {
+                    val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                        type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }, getString(R.string.share_website)))
+                    status = "Website snapshot ready to share."
+                } else if (file != null) screens.add(Screen("preview", url = "$base/preview/${path ?: "index.html"}", directory = file))
+            } }, onFailure = { runOnUiThread {
+                busy = false
+                if (it is HostKeyApproval) { hostKeyForTemplates = false; pendingHostKey = it; status = "Confirm the SFTP server key before publishing." }
+                else status = it.message ?: "The operation failed."
+            } })
         }
     }
 

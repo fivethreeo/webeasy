@@ -2,26 +2,26 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { rendererSources, rendererFlags } from "./renderer-sources.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = path.join(root, "shared/renderer");
 const output = path.join(root, "dist/renderer");
 const generated = path.join(root, "website/src/generated/renderer-bytes.js");
-const files = [
-  "renderer.c", "renderer.h", "vendor/mustach/mustach.c", "vendor/mustach/mustach.h",
-  "vendor/cjson/cJSON.c", "vendor/cjson/cJSON.h",
-].map((name) => path.join(source, name));
-const modified = Math.max(...await Promise.all([...files, fileURLToPath(import.meta.url)]
+const files = rendererSources();
+const modified = Math.max(...await Promise.all([...files, ...["renderer.h", "site.h", "html.h"]
+  .map((name) => path.join(source, name)), fileURLToPath(import.meta.url),
+  fileURLToPath(new URL("./renderer-sources.mjs", import.meta.url))]
   .map(async (file) => (await stat(file)).mtimeMs)));
 if (await stat(generated).then((file) => file.mtimeMs >= modified, () => false)) process.exit(0);
 await mkdir(output, { recursive: true });
 const local = path.join(root, "dist/toolchains/emsdk/upstream/emscripten/emcc");
 const compiler = process.env.EMCC || (await stat(local).then(() => local, () => "emcc"));
 const result = spawnSync(compiler, [
-  ...files.filter((file) => file.endsWith(".c")), "-std=c11", "-O2", "-DNO_OPEN_MEMSTREAM",
+  ...files, ...rendererFlags, "-O2",
   "-sSTANDALONE_WASM=1", "-sALLOW_MEMORY_GROWTH=1", "-sMAXIMUM_MEMORY=536870912",
   "-sSTACK_SIZE=2097152",
-  "-sEXPORTED_FUNCTIONS=[\"_webeasy_render\",\"_webeasy_free\",\"_malloc\"]",
+  "-sEXPORTED_FUNCTIONS=[\"_webeasy_render\",\"_webeasy_normalize\",\"_webeasy_prepare\",\"_webeasy_compile\",\"_webeasy_free\",\"_malloc\"]",
   "-Wl,--no-entry", "-o", path.join(output, "renderer.wasm"),
 ], { cwd: root, encoding: "utf8" });
 if (result.error || result.status !== 0) {

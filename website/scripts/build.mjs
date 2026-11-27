@@ -20,6 +20,9 @@ await cp(path.join(source, "assets"), path.join(output, "assets"), { recursive: 
 const rendererLicenses = await Promise.all([
   ["Mustach 1.2.10 (0BSD)", "../shared/renderer/vendor/mustach/LICENSE.txt"],
   ["cJSON 1.7.19 (MIT)", "../shared/renderer/vendor/cjson/LICENSE"],
+  ["Lexbor 2.5.0 (Apache-2.0)", "../shared/renderer/vendor/lexbor/LICENSE"],
+  ["Lexbor notices", "../shared/renderer/vendor/lexbor/NOTICE"],
+  ["utf8proc 2.10.0 (MIT and Unicode data notices)", "../shared/renderer/vendor/utf8proc/LICENSE.md"],
 ].map(async ([name, file]) => `${name}\n${await readFile(path.join(website, file), "utf8")}`));
 await writeFile(path.join(output, "renderer-licenses.txt"), rendererLicenses.join("\n"));
 

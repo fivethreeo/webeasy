@@ -12,10 +12,11 @@ static void fail(JNIEnv *env, const char *type, const char *message)
     if (exception) (*env)->ThrowNew(env, exception, message);
 }
 
-JNIEXPORT jbyteArray JNICALL
-Java_no_webeasy_app_NativeRenderer_renderBytes(JNIEnv *env, jobject instance, jbyteArray request)
+/* Keep allocation/exception handling in one boundary. All C APIs accept ordinary
+ * NUL-terminated UTF-8 and return malloc-owned UTF-8 JSON. Java byte arrays avoid
+ * the modified UTF-8 encoding used by JNI's GetStringUTFChars(). */
+static jbyteArray invoke(JNIEnv *env, jbyteArray request, char *(*operation)(const char *))
 {
-    (void)instance;
     if (!request) {
         fail(env, "java/lang/IllegalArgumentException", "Missing renderer request.");
         return NULL;
@@ -37,7 +38,7 @@ Java_no_webeasy_app_NativeRenderer_renderBytes(JNIEnv *env, jobject instance, jb
         fail(env, "java/lang/IllegalArgumentException", "Invalid renderer request.");
         return NULL;
     }
-    char *output = webeasy_render(input);
+    char *output = operation(input);
     free(input);
     if (!output) {
         fail(env, "java/lang/IllegalStateException", "Cannot render website.");
@@ -53,4 +54,18 @@ Java_no_webeasy_app_NativeRenderer_renderBytes(JNIEnv *env, jobject instance, jb
     if (result) (*env)->SetByteArrayRegion(env, result, 0, (jsize)output_length, (const jbyte *)output);
     webeasy_free(output);
     return result;
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_no_webeasy_app_NativeRenderer_renderBytes(JNIEnv *env, jobject instance, jbyteArray request)
+{
+    (void)instance;
+    return invoke(env, request, webeasy_render);
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_no_webeasy_app_NativeRenderer_generateBytes(JNIEnv *env, jobject instance, jbyteArray request, jboolean compile)
+{
+    (void)instance;
+    return invoke(env, request, compile ? webeasy_compile : webeasy_normalize);
 }
