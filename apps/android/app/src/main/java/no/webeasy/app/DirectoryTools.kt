@@ -163,7 +163,7 @@ internal class DirectoryTools(private val context: Context) {
                 entries.put(path, JSONObject().put("size", size).put("sha256", hash))
             }
             require(entries.has("webeasy.sqlite"))
-            val manifest = JSONObject().put("format", "webeasy-backup").put("version", 1).put("schemaVersion", 4)
+            val manifest = JSONObject().put("format", "webeasy-backup").put("version", 1).put("schemaVersion", 5)
                 .put("id", UUID.randomUUID().toString()).put("createdAt", dateFormat.format(now)).put("files", entries)
             val marker = createFile(directory, manifestName); created.add(marker)
             write(marker, manifest.toString().toByteArray().inputStream())
@@ -181,7 +181,7 @@ internal class DirectoryTools(private val context: Context) {
         val marker = directory.findFile(manifestName)?.takeIf { it.isFile } ?: error("Not a completed Webeasy backup.")
         val manifest = JSONObject(limited(read(marker), 16 * 1024 * 1024).toString(Charsets.UTF_8))
         require(manifest.optString("format") == "webeasy-backup" && manifest.optInt("version") == 1 &&
-            manifest.optInt("schemaVersion") == 4 && manifest.optString("id").matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))) {
+            manifest.optInt("schemaVersion") in 4..5 && manifest.optString("id").matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))) {
             "Unsupported backup format."
         }
         val date = Instant.parse(manifest.getString("createdAt"))

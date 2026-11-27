@@ -17,6 +17,8 @@
     <string name="ui_b53f3ff91b5b" formatted="false">"Alternativ tekst"</string>
     <string name="ui_98b7abb057c4" formatted="false">"Alternativ tekst (bilder)"</string>
     <string name="ui_b99a17e406e5" formatted="false">"Tilleggsinnhold"</string>
+    <string name="ui_d95082a2ee57" formatted="false">"Forfatter"</string>
+    <string name="ui_2dc783e6b491" formatted="false">"Forfatter (valgfritt)"</string>
     <string name="ui_76900f1bfd16" formatted="false">"Tilbake"</string>
     <string name="ui_339c4c4548bc" formatted="false">"Sikkerhetskopier database og medier til serveren"</string>
     <string name="ui_02a2840b598b" formatted="false">"Sikkerhetskopier nå"</string>
@@ -218,6 +220,8 @@
     <string name="ui_d223bd611e60" formatted="false">"Lagret server"</string>
     <string name="ui_47f0c8df338d" formatted="false">"Lagret lokalt i SQLite."</string>
     <string name="ui_58ac5648b3da" formatted="false">"Lagret sikkert på denne enheten. Tilkoblingen kontrolleres når du publiserer."</string>
+    <string name="ui_c44018df6c4d" formatted="false">"Undertittel"</string>
+    <string name="ui_ef8f72657fb5" formatted="false">"Undertittel (valgfritt)"</string>
     <string name="ui_9bae918add9a" formatted="false">"Seksjoner"</string>
     <string name="ui_2a78025de6aa" formatted="false">"Velg"</string>
     <string name="ui_74a883a037bc" formatted="false">"Innstillinger"</string>

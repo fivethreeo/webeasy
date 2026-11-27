@@ -34,7 +34,9 @@
         }
       ],
       "asides": [],
-      "children": []
+      "children": [],
+      "subtitle": "A field journal of quiet places, simple walks, and days by the water.",
+      "author": "Fjord & Field"
     },
     {
       "slug": "places",
@@ -86,7 +88,8 @@
           "asides": [],
           "children": []
         }
-      ]
+      ],
+      "author": "Fjord & Field"
     },
     {
       "slug": "film",
@@ -106,7 +109,8 @@
           "content": "<p>Eight seconds, H.264 MP4, 1280 by 720 pixels. Stored locally with the backup, so it works without a third-party video service.</p>"
         }
       ],
-      "children": []
+      "children": [],
+      "author": "Fjord & Field"
     },
     {
       "slug": "about",
@@ -128,7 +132,8 @@
         }
       ],
       "asides": [],
-      "children": []
+      "children": [],
+      "author": "Fjord & Field"
     }
   ],
   "news": [

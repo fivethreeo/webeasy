@@ -17,6 +17,8 @@
     <string name="ui_b53f3ff91b5b" formatted="false">"Alternative text"</string>
     <string name="ui_98b7abb057c4" formatted="false">"Alternative text (images)"</string>
     <string name="ui_b99a17e406e5" formatted="false">"Asides"</string>
+    <string name="ui_d95082a2ee57" formatted="false">"Author"</string>
+    <string name="ui_2dc783e6b491" formatted="false">"Author (optional)"</string>
     <string name="ui_76900f1bfd16" formatted="false">"Back"</string>
     <string name="ui_339c4c4548bc" formatted="false">"Back up database and media to hosting"</string>
     <string name="ui_02a2840b598b" formatted="false">"Back up now"</string>
@@ -218,6 +220,8 @@
     <string name="ui_d223bd611e60" formatted="false">"Saved hosting"</string>
     <string name="ui_47f0c8df338d" formatted="false">"Saved locally to SQLite."</string>
     <string name="ui_58ac5648b3da" formatted="false">"Saved securely on this device. The connection is checked when you publish."</string>
+    <string name="ui_c44018df6c4d" formatted="false">"Secondary title"</string>
+    <string name="ui_ef8f72657fb5" formatted="false">"Secondary title (optional)"</string>
     <string name="ui_9bae918add9a" formatted="false">"Sections"</string>
     <string name="ui_2a78025de6aa" formatted="false">"Select"</string>
     <string name="ui_74a883a037bc" formatted="false">"Settings"</string>

@@ -43,7 +43,7 @@ final class ContentStore: @unchecked Sendable {
         do {
             try execute("PRAGMA foreign_keys = ON")
             let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
-            guard (0...4).contains(version) else {
+            guard (0...5).contains(version) else {
                 throw ContentError.invalid("A database migration is required. Your content has not been deleted.")
             }
             try transaction {
@@ -63,7 +63,11 @@ final class ContentStore: @unchecked Sendable {
                     try execute("ALTER TABLE news ADD COLUMN content TEXT NOT NULL DEFAULT ''")
                     try execute("UPDATE news SET content = short_content")
                 }
-                if version < 4 { try execute("PRAGMA user_version = 4") }
+                if version > 0 && version < 5 {
+                    try execute("ALTER TABLE pages ADD COLUMN author TEXT NOT NULL DEFAULT ''")
+                    try execute("ALTER TABLE pages ADD COLUMN subtitle TEXT NOT NULL DEFAULT ''")
+                }
+                if version < 5 { try execute("PRAGMA user_version = 5") }
                 if try rows("SELECT value FROM metadata WHERE key = ?", ["seeded"]).isEmpty {
                     // Do not replace an older unmarked site, including its customizations.
                     let occupied = try ["pages", "news", "media", "metadata"].contains {
@@ -367,10 +371,12 @@ final class ContentStore: @unchecked Sendable {
             if parent == nil && ["news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"].contains(slug) {
                 throw ContentError.invalid("Reserved page slug.")
             }
-            try execute("INSERT INTO pages (id, parent_id, title, menu_title, template_id, slug, content, date, position, cover_media_id, cover_alt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            try execute("INSERT INTO pages (id, parent_id, title, menu_title, template_id, slug, content, date, position, cover_media_id, cover_alt, author, subtitle) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         [id, parent, try text(page, "title", required: true), try text(page, "menuTitle", required: true),
                          templateID, slug, try text(page, "content"), try text(page, "date", required: true), position,
-                         (page["coverMediaId"] as? String).flatMap { $0.isEmpty ? nil : $0 }, page["coverAlt"] as? String ?? ""])
+                         (page["coverMediaId"] as? String).flatMap { $0.isEmpty ? nil : $0 }, page["coverAlt"] as? String ?? "",
+                         try (page["author"] == nil ? "" : text(page, "author")),
+                         try (page["subtitle"] == nil ? "" : text(page, "subtitle"))])
             try writeRelated(page, owner: "page", id: id)
             try writePages(list(page, "children"), parent: id)
         }
@@ -420,7 +426,9 @@ final class ContentStore: @unchecked Sendable {
     }
 
     private func pages(parent: String?) throws -> [[String: Any]] {
-        let sql = "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
+        let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
+        let details = version >= 5 ? "author, subtitle" : "'' AS author, '' AS subtitle"
+        let sql = "SELECT id, title, \(details), menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE \(parent == nil ? "parent_id IS NULL" : "parent_id = ?") ORDER BY position"
         return try rows(sql, parent.map { [$0] } ?? []).map { original in
             var page = try related(original, owner: "page")
             page["children"] = try pages(parent: text(page, "id", required: true))
@@ -482,7 +490,8 @@ final class ContentStore: @unchecked Sendable {
         let previous = database
         database = snapshot
         defer { database = previous; sqlite3_close(snapshot) }
-        guard try rows("PRAGMA user_version").first?["user_version"] as? Int == 4,
+        let version = try rows("PRAGMA user_version").first?["user_version"] as? Int ?? 0
+        guard (4...5).contains(version),
               try rows("PRAGMA quick_check").first?.values.first as? String == "ok",
               try rows("PRAGMA foreign_key_check").isEmpty else {
             throw ContentError.invalid("Backup database is damaged or unsupported.")
@@ -555,6 +564,13 @@ final class ContentStore: @unchecked Sendable {
             throw ContentError.invalid("Cannot open the restored database.")
         }
         try execute("PRAGMA foreign_keys = ON")
+        if try rows("PRAGMA user_version").first?["user_version"] as? Int == 4 {
+            try transaction {
+                try execute("ALTER TABLE pages ADD COLUMN author TEXT NOT NULL DEFAULT ''")
+                try execute("ALTER TABLE pages ADD COLUMN subtitle TEXT NOT NULL DEFAULT ''")
+                try execute("PRAGMA user_version = 5")
+            }
+        }
     }
 
     func restoreSnapshot(_ directory: URL) throws {

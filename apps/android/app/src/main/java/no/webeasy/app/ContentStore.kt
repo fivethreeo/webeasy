@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
 
 class ContentStore(private val context: Context) :
-    SQLiteOpenHelper(context, "webeasy.sqlite", null, 4) {
+    SQLiteOpenHelper(context, "webeasy.sqlite", null, 5) {
     val mediaDirectory = File(context.filesDir, "Media")
     private var swapping = false
 
@@ -133,7 +133,7 @@ class ContentStore(private val context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        check(oldVersion in 1..3 && newVersion == 4) { "A database migration is required. Your existing content has not been deleted." }
+        check(oldVersion in 1..4 && newVersion == 5) { "A database migration is required. Your existing content has not been deleted." }
         if (oldVersion == 1) db.execSQL("ALTER TABLE pages ADD COLUMN template_id TEXT NOT NULL DEFAULT 'page'")
         if (oldVersion < 3) {
             for (table in listOf("pages", "news")) {
@@ -142,8 +142,12 @@ class ContentStore(private val context: Context) :
             }
             db.execSQL("ALTER TABLE sections ADD COLUMN subheading TEXT NOT NULL DEFAULT ''")
         }
-        db.execSQL("ALTER TABLE news ADD COLUMN content TEXT NOT NULL DEFAULT ''")
-        db.execSQL("UPDATE news SET content = short_content")
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE news ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+            db.execSQL("UPDATE news SET content = short_content")
+        }
+        db.execSQL("ALTER TABLE pages ADD COLUMN author TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE pages ADD COLUMN subtitle TEXT NOT NULL DEFAULT ''")
     }
 
     private fun rows(db: SQLiteDatabase, sql: String, args: Array<String>? = null): JSONArray {
@@ -181,8 +185,8 @@ class ContentStore(private val context: Context) :
 
     private fun pages(db: SQLiteDatabase, parent: String?): JSONArray {
         val records = if (parent == null) rows(db,
-            "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
-        else rows(db, "SELECT id, title, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
+            "SELECT id, title, author, subtitle, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id IS NULL ORDER BY position")
+        else rows(db, "SELECT id, title, author, subtitle, menu_title AS menuTitle, template_id AS templateId, COALESCE(cover_media_id, '') AS coverMediaId, cover_alt AS coverAlt, slug, content, date FROM pages WHERE parent_id = ? ORDER BY position", arrayOf(parent))
         records.objects().forEach { page ->
             related(db, page, "page")
             page.put("children", pages(db, page.getString("id")))
@@ -375,6 +379,8 @@ class ContentStore(private val context: Context) :
             if (parent == null) require(pageSlug !in setOf("news", "assets", "media", "examples", "components", "editor", "provision", "catalog", "content", "index"))
             insert(db, "pages", mapOf("id" to pageId, "parent_id" to parent, "title" to text(page, "title", true),
                 "menu_title" to text(page, "menuTitle", true), "template_id" to templateId,
+                "author" to if (page.has("author")) text(page, "author") else "",
+                "subtitle" to if (page.has("subtitle")) text(page, "subtitle") else "",
                 "cover_media_id" to page.optString("coverMediaId").takeIf(String::isNotEmpty), "cover_alt" to page.optString("coverAlt"),
                 "slug" to pageSlug, "content" to text(page, "content"),
                 "date" to date(page), "position" to position))
@@ -576,7 +582,7 @@ class ContentStore(private val context: Context) :
     private fun validateSnapshot(directory: File) {
         val file = File(directory, "webeasy.sqlite")
         SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS).use { db ->
-            require(db.version == 4) { "Unsupported backup database version." }
+            require(db.version in 4..5) { "Unsupported backup database version." }
             db.rawQuery("PRAGMA quick_check", null).use { cursor ->
                 require(cursor.moveToFirst() && cursor.getString(0) == "ok") { "Backup database is damaged." }
             }

@@ -1,4 +1,5 @@
 <div class="stack content-blocks landing-layout">
-  <header class="box stack callout"><h1>{{title}}</h1><time datetime="{{date}}">{{date}}</time></header>
+  {{^isLandingCover}}<header class="box stack callout"><h1>{{title}}</h1>{{#subtitle}}<p class="secondary-title">{{subtitle}}</p>{{/subtitle}}</header>{{/isLandingCover}}
   {{{content}}}
+  <div class="cluster page-byline">{{#author}}<span>{{author}}</span>{{/author}}<time datetime="{{date}}">{{date}}</time></div>
 </div>

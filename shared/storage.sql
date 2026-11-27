@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS pages (
     parent_id TEXT REFERENCES pages(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     menu_title TEXT NOT NULL,
+    author TEXT NOT NULL DEFAULT '',
+    subtitle TEXT NOT NULL DEFAULT '',
     template_id TEXT NOT NULL DEFAULT 'page',
     cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
     cover_alt TEXT NOT NULL DEFAULT '',

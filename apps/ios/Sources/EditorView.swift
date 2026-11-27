@@ -836,6 +836,8 @@ private struct NativeContentForm: View {
                 LabeledTextField(title: "Title", text: text("title"))
                 if kind == .page {
                     LabeledTextField(title: "Menu title", text: text("menuTitle"))
+                    LabeledTextField(title: "Secondary title (optional)", text: text("subtitle"))
+                    LabeledTextField(title: "Author (optional)", text: text("author"))
                     Picker("Page layout", selection: Binding(get: { node.fields["templateId"] ?? "page" },
                                                              set: { node.fields["templateId"] = $0; model.changed() })) {
                         ForEach(model.catalog?.templates.filter { $0.pageLayout == true } ?? []) { entry in

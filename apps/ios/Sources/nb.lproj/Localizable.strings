@@ -16,6 +16,8 @@
 "Alternative text" = "Alternativ tekst";
 "Alternative text (images)" = "Alternativ tekst (bilder)";
 "Asides" = "Tilleggsinnhold";
+"Author" = "Forfatter";
+"Author (optional)" = "Forfatter (valgfritt)";
 "Back" = "Tilbake";
 "Back up database and media to hosting" = "Sikkerhetskopier database og medier til serveren";
 "Back up now" = "Sikkerhetskopier nå";
@@ -217,6 +219,8 @@
 "Saved hosting" = "Lagret server";
 "Saved locally to SQLite." = "Lagret lokalt i SQLite.";
 "Saved securely on this device. The connection is checked when you publish." = "Lagret sikkert på denne enheten. Tilkoblingen kontrolleres når du publiserer.";
+"Secondary title" = "Undertittel";
+"Secondary title (optional)" = "Undertittel (valgfritt)";
 "Sections" = "Seksjoner";
 "Select" = "Velg";
 "Settings" = "Innstillinger";

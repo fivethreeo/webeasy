@@ -42,6 +42,49 @@ class ContentStoreTest {
     @After
     fun tearDown() { store.close() }
 
+    private fun legacySchema(): String = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+        .replace("    author TEXT NOT NULL DEFAULT '',\n", "")
+        .replace("    subtitle TEXT NOT NULL DEFAULT '',\n", "")
+
+    @Test
+    fun versionFourMigrationAndBackupsPreservePageDetailsAndExistingNews() {
+        store.close()
+        context.deleteDatabase("webeasy.sqlite")
+        val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
+        legacySchema().split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
+        old.execSQL("INSERT INTO metadata (key,value) VALUES ('seeded','1')")
+        old.execSQL("INSERT INTO pages (id,title,menu_title,slug,content,date,position) VALUES ('legacy','Old page','Menu','legacy','<p>Keep me</p>','2026-11-01',0)")
+        old.execSQL("INSERT INTO news (id,title,slug,date,short_content,content) VALUES ('story','Story','story','2026-11-01','Short','Keep the full story')")
+        old.version = 4
+        old.close()
+        val legacy = java.io.File(context.cacheDir, "legacy-snapshot-${java.util.UUID.randomUUID()}").apply { mkdirs() }
+        context.getDatabasePath("webeasy.sqlite").copyTo(java.io.File(legacy, "webeasy.sqlite"))
+        java.io.File(legacy, "media").mkdirs()
+        store = ContentStore(context)
+        val project = store.project()
+        val page = project.getJSONArray("pages").getJSONObject(0)
+        assertEquals("", page.getString("author"))
+        assertEquals("", page.getString("subtitle"))
+        assertEquals("Keep the full story", project.getJSONArray("news").getJSONObject(0).getString("content"))
+        page.put("author", "An author").put("subtitle", "A secondary title")
+        store.save(project)
+        val snapshot = store.backupSnapshot()
+        try {
+            page.put("author", "Later author")
+            store.save(project)
+            store.restoreSnapshot(snapshot)
+            store.close(); store = ContentStore(context)
+            val saved = store.project().getJSONArray("pages").getJSONObject(0)
+            assertEquals("An author", saved.getString("author"))
+            assertEquals("A secondary title", saved.getString("subtitle"))
+            store.restoreSnapshot(legacy)
+            val migrated = store.project().getJSONArray("pages").getJSONObject(0)
+            assertEquals("Old page", migrated.getString("title"))
+            assertEquals("", migrated.getString("author"))
+            assertEquals("", migrated.getString("subtitle"))
+        } finally { snapshot.deleteRecursively(); legacy.deleteRecursively() }
+    }
+
     @Test
     fun freshStarterIncludesEditableSiteMediaAndTheme() {
         val project = store.project()
@@ -504,7 +547,7 @@ class ContentStoreTest {
         store.close()
         context.deleteDatabase("webeasy.sqlite")
         val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
-        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+        val schema = legacySchema()
             .replace("    template_id TEXT NOT NULL DEFAULT 'page',\n", "")
             .replace("    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,\n", "")
             .replace("    cover_alt TEXT NOT NULL DEFAULT '',\n", "")
@@ -528,7 +571,7 @@ class ContentStoreTest {
         store.close()
         store = ContentStore(context)
         assertEquals("reading-page", store.project().getJSONArray("pages").getJSONObject(0).getString("templateId"))
-        assertEquals(4, store.readableDatabase.version)
+        assertEquals(5, store.readableDatabase.version)
     }
 
     @Test
@@ -554,7 +597,7 @@ class ContentStoreTest {
         store.close()
         context.deleteDatabase("webeasy.sqlite")
         val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
-        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+        val schema = legacySchema()
             .replace("    cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL,\n", "")
             .replace("    cover_alt TEXT NOT NULL DEFAULT '',\n", "")
             .replace("    subheading TEXT NOT NULL DEFAULT '',\n", "")
@@ -607,7 +650,7 @@ class ContentStoreTest {
         store.close()
         context.deleteDatabase("webeasy.sqlite")
         val old = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("webeasy.sqlite"), null)
-        val schema = context.assets.open("website/storage.sql").bufferedReader().use { it.readText() }
+        val schema = legacySchema()
             .replace("    content TEXT NOT NULL DEFAULT '',\n", "")
         schema.split(";").map(String::trim).filter(String::isNotEmpty).forEach(old::execSQL)
         old.execSQL("INSERT INTO metadata (key, value) VALUES ('seeded', '1')")
@@ -619,7 +662,7 @@ class ContentStoreTest {
         val news = store.project().getJSONArray("news").getJSONObject(0)
         assertEquals(rich, news.getString("content"))
         assertEquals(rich, news.getString("shortContent"))
-        assertEquals(4, store.readableDatabase.version)
+        assertEquals(5, store.readableDatabase.version)
     }
 
     @Test

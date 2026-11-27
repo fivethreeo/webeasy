@@ -697,6 +697,7 @@ function renderEditor() {
     input(record, "title", "Title"));
   if (kind === "page") {
     form.append(input(record, "menuTitle", "Menu title"));
+    form.append(input(record, "subtitle", "Secondary title (optional)"), input(record, "author", "Author (optional)"));
     const label = element("label", "stack", "Page layout");
     const layout = document.createElement("select");
     layout.setAttribute("aria-label", "Page layout");

@@ -1,5 +1,9 @@
 {
   "(empty)": "(tom)",
+  "Author (optional)": "Forfatter (valgfritt)",
+  "Secondary title (optional)": "Undertittel (valgfritt)",
+  "Author": "Forfatter",
+  "Secondary title": "Undertittel",
   "Add aside": "Legg til tilleggsinnhold",
   "Add hosting": "Legg til server",
   "Replace hosting": "Bytt server",

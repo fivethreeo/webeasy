@@ -325,6 +325,8 @@ static cJSON *pages(struct site *site, const cJSON *records, int depth)
         push(site, slugs, cJSON_CreateString(value));
         identity(site, page, record);
         field(site, page, record, "title", 1, 0);
+        field(site, page, record, "author", 0, 1);
+        field(site, page, record, "subtitle", 0, 1);
         field(site, page, record, "menuTitle", 1, 0);
         const char *template = get(record, "templateId") ? required_text(site, record, "templateId", 1) : "page";
         if (!(*template >= 'a' && *template <= 'z')) fail(site, "Invalid page layout ID.");
@@ -579,6 +581,8 @@ static cJSON *cover_data(struct site *site, const cJSON *record)
 static cJSON *record_data(struct site *site, const cJSON *record)
 {
     cJSON *fields = copy(site, record), *used_ids = array(site), *sections = array(site);
+    text(site, fields, "author", string(record, "author"));
+    text(site, fields, "subtitle", string(record, "subtitle"));
     const cJSON *section;
     cJSON_ArrayForEach(section, get(record, "sections")) {
         if (*site->error) break;
@@ -622,8 +626,13 @@ static cJSON *record_data(struct site *site, const cJSON *record)
     flag(site, fields, "hasAsides", cJSON_GetArraySize(asides) > 0);
     set(site, fields, "asides", asides);
     set(site, fields, "cover", cover_data(site, record));
+    flag(site, fields, "isLandingCover", !strcmp(string(record, "templateId"), "landing-page") && !cJSON_IsNull(get(fields, "cover")));
     set(site, fields, "content", compose(site, "main-content", content));
-    cJSON *body = compose(site, "body", copy(site, fields));
+    /* Master uses the landing cover as its hero. The nested body gets a copy
+     * without that cover, so the same image is not rendered twice. */
+    cJSON *body_values = copy(site, fields);
+    if (cJSON_IsTrue(get(fields, "isLandingCover"))) set(site, body_values, "cover", cJSON_CreateNull());
+    cJSON *body = compose(site, "body", body_values);
     set(site, fields, "content", body);
     return fields;
 }
@@ -730,6 +739,8 @@ static void document(struct site *site, const char *title, cJSON *content, const
     const cJSON *item;
     cJSON_ArrayForEach(item, navigation) set(site, values, item->string, copy(site, item));
     text(site, values, "title", title);
+    const cJSON *record = get(current, "record");
+    flag(site, values, "hasLandingCover", current && !strcmp(string(record, "templateId"), "landing-page") && cover(site, record));
     size_t depth = 0;
     for (const char *p = path; *p; p++) if (*p == '/') depth++;
     /* Files share root-level assets. news/date/slug/index.html needs "../../../"

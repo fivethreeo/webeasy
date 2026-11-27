@@ -16,6 +16,8 @@
 "Alternative text" = "Alternative text";
 "Alternative text (images)" = "Alternative text (images)";
 "Asides" = "Asides";
+"Author" = "Author";
+"Author (optional)" = "Author (optional)";
 "Back" = "Back";
 "Back up database and media to hosting" = "Back up database and media to hosting";
 "Back up now" = "Back up now";
@@ -217,6 +219,8 @@
 "Saved hosting" = "Saved hosting";
 "Saved locally to SQLite." = "Saved locally to SQLite.";
 "Saved securely on this device. The connection is checked when you publish." = "Saved securely on this device. The connection is checked when you publish.";
+"Secondary title" = "Secondary title";
+"Secondary title (optional)" = "Secondary title (optional)";
 "Sections" = "Sections";
 "Select" = "Select";
 "Settings" = "Settings";

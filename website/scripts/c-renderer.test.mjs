@@ -78,6 +78,34 @@ test("native C and WASM produce identical complete websites without changing pro
   assert.equal(JSON.stringify(project), before);
 });
 
+test("landing covers contain one image and a title/subtitle jumbotron; regular pages end with author/date", async () => {
+  const catalog = await loadCatalog(path.join(root, "website/src"));
+  const project = await loadProject(path.join(root, "website/src"));
+  const page = project.pages[0];
+  page.templateId = "landing-page";
+  page.author = "<Author & Co>";
+  page.subtitle = "<A secondary title & more>";
+  page.coverMediaId = "layout-cover";
+  project.media.push({ id: "layout-cover", filename: "layout-cover.png", mimeType: "image/png", originalName: "Cover.png", size: 1 });
+  const input = { project, catalog };
+  const compiled = compileRequest(input);
+  assert.deepEqual(native(input, "compile").files, compiled.files);
+  assert.deepEqual(renderSite(project, catalog), compiled.files);
+  const document = new JSDOM(compiled.files.find(file => file.path === "index.html").html).window.document;
+  assert.equal(document.querySelector(".jumbotron h1").textContent, page.title);
+  assert.equal(document.querySelector(".jumbotron .secondary-title").textContent, page.subtitle);
+  assert.ok(document.querySelector(".landing-cover .site-header"));
+  assert.equal(document.querySelectorAll('img[src="media/layout-cover.png"]').length, 1);
+  assert.ok(document.querySelector(".page-byline").textContent.includes(page.author));
+  page.templateId = "reading-page";
+  const reading = compileRequest(input);
+  assert.deepEqual(native(input, "compile").files, reading.files);
+  const readingDocument = new JSDOM(reading.files.find(file => file.path === "index.html").html).window.document;
+  assert.equal(readingDocument.querySelector(".landing-cover"), null);
+  assert.ok(readingDocument.querySelector(".reading-layout").lastElementChild.matches(".page-byline"));
+  assert.equal(readingDocument.querySelector(".page-byline time").getAttribute("datetime"), page.date);
+});
+
 test("the full C pipeline matches existing normalization, preparation, media and rendered websites", async () => {
   const catalog = await loadCatalog(path.join(root, "website/src"));
   const original = JSON.parse(await readFile(path.join(root, "website/src/content.json"), "utf8"));

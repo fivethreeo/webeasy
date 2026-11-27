@@ -923,6 +923,8 @@ class MainActivity : ComponentActivity() {
                 item { NativeText(record, "title", "Title", screen.kind) }
                 if (screen.kind == "page") {
                     item { NativeText(record, "menuTitle", "Menu title", screen.kind) }
+                    item { NativeText(record, "subtitle", "Secondary title (optional)", screen.kind) }
+                    item { NativeText(record, "author", "Author (optional)", screen.kind) }
                     item {
                         val selected = record.optString("templateId", "page")
                         OutlinedButton(onClick = { layoutDialog = true }) {

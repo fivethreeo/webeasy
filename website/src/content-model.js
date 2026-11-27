@@ -70,6 +70,8 @@ export function normalizeProject(input, sanitize, sanitizeShort = sanitize) {
       if (!/^[a-z][a-z0-9-]*$/.test(templateId)) throw new Error("Invalid page layout ID.");
       return {
         id: identity(page), title: text(page, "title", true), menuTitle: text(page, "menuTitle", true),
+        author: page.author === undefined ? "" : text(page, "author"),
+        subtitle: page.subtitle === undefined ? "" : text(page, "subtitle"),
         templateId, slug: pageSlug, content: sanitize(text(page, "content")), date: date(page),
         ...coverFields(page),
         sections: sections(page), asides: asides(page), children: pages(list(page, "children")),
@@ -199,11 +201,13 @@ export function prepareSite(project, catalog, options = {}) {
     const image = coverMedia(record, project.media);
     const html = rich(record.content ?? record.shortContent, homeHref);
     const asides = asideData(record.asides);
-    const values = { ...record, children: (record.children ?? []).map(pageLink),
+    const values = { ...record, author: record.author ?? "", subtitle: record.subtitle ?? "",
+      isLandingCover: record.templateId === "landing-page" && Boolean(image),
+      children: (record.children ?? []).map(pageLink),
       html, sections, asides, hasAsides: asides.length > 0,
       cover: image ? { src: `media/${image.filename}`, alt: record.coverAlt ?? "" } : null,
       content: composed("main-content", { html, sections }) };
-    return { ...values, content: composed("body", values) };
+    return { ...values, content: composed("body", { ...values, cover: values.isLandingCover ? null : values.cover }) };
   };
   const pageContent = (entry, breadcrumbs = false) => {
     const subpages = subpageItems(entry, home?.id);
@@ -225,7 +229,9 @@ export function prepareSite(project, catalog, options = {}) {
       menu: project.pages.filter((page) => page.id !== home?.id).map((page) => ({
         ...pageLink(page), active: page.id === activeId, current: page.id === currentId,
       })) };
+    const hasLandingCover = current?.record.templateId === "landing-page" && Boolean(coverMedia(current.record, project.media));
     documents.push({ path: file, template: "master", values: { ...extra, ...navigation, title, baseHref: prefix,
+      hasLandingCover: Boolean(hasLandingCover),
       content, navigation: composed("site-header", navigation) } });
   };
   for (const page of pages) {

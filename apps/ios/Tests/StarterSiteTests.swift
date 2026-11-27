@@ -35,6 +35,8 @@ struct StarterSiteTests {
         var edited = project
         var editedPages = pages
         editedPages[0]["title"] = "Keep my site"
+        editedPages[0]["author"] = "An author"
+        editedPages[0]["subtitle"] = "A secondary title"
         edited["pages"] = editedPages
         try store!.save(edited)
         let css = Data("body { color: green; }".utf8)
@@ -50,12 +52,27 @@ struct StarterSiteTests {
         store = try ContentStore(support: support, bundled: bundled)
         let reopened = try store!.project()
         precondition((reopened["pages"] as! [[String: Any]])[0]["title"] as! String == "Keep my site")
+        precondition((reopened["pages"] as! [[String: Any]])[0]["author"] as! String == "An author")
+        precondition((reopened["pages"] as! [[String: Any]])[0]["subtitle"] as! String == "A secondary title")
         let reopenedSources = try store!.templateSources()
         let expectedSources = try JSONDecoder().decode([String: String].self, from: sources)
         let actualSources = try JSONDecoder().decode([String: String].self, from: reopenedSources!)
         precondition(actualSources == expectedSources)
         let reopenedCSS = try exportedCSS(store!)
         precondition(reopenedCSS == css)
+        let legacy = try store!.backupSnapshot()
+        defer { try? files.removeItem(at: legacy) }
+        precondition(sqlite3_open(legacy.appendingPathComponent("webeasy.sqlite").path, &database) == SQLITE_OK)
+        precondition(sqlite3_exec(database,
+            "ALTER TABLE pages DROP COLUMN author; ALTER TABLE pages DROP COLUMN subtitle; PRAGMA user_version = 4;",
+            nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(database)
+        try store!.restoreSnapshot(legacy)
+        let migrated = try store!.project()
+        let migratedPage = (migrated["pages"] as! [[String: Any]])[0]
+        precondition(migratedPage["title"] as! String == "Keep my site")
+        precondition(migratedPage["author"] as! String == "")
+        precondition(migratedPage["subtitle"] as! String == "")
         // Deleting all editable pages/news must remain empty after another launch.
         try store!.save(["version": 1, "pages": [[String: Any]](), "news": [[String: Any]]()])
         store = nil

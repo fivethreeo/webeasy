@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const project = JSON.parse(await readFile(new URL("../src/content.json", import.meta.url), "utf8"));
 const photo = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
 const clip = await readFile(new URL("./fixtures/clip.mp4", import.meta.url));
+const starter = JSON.parse(await readFile(new URL("../../shared/starter-site/content.json", import.meta.url), "utf8"));
+const starterMetadata = JSON.parse(await readFile(new URL("../../shared/starter-site/metadata.json", import.meta.url), "utf8"));
 
 async function openEditor(page) {
   const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
@@ -28,6 +30,127 @@ async function openEditor(page) {
   await page.goto("/editor.html");
   await expect(page.getByRole("status")).toHaveText("Ready.");
 }
+
+test("reading-page asides use spare width without widening prose", async ({ page }) => {
+  await page.goto("/examples/reading-page.html");
+  const narrowWidth = await page.locator(".reading-layout").evaluate(element =>
+    parseFloat(getComputedStyle(element).maxInlineSize));
+  await page.locator(".reading-layout").evaluate(element => {
+    const main = element.closest("main");
+    main.classList.add("published-shell");
+    main.replaceChildren(element);
+    const notes = document.createElement("section");
+    notes.className = "stack content-blocks";
+    notes.innerHTML = `<div class="with-sidebar with-sidebar:right">
+      <div class="stack content-main"><div class="stack rich-content"><p>A longer reading passage stays at a comfortable measure even when there is room for a note beside it.</p></div></div>
+      <div class="stack content-asides"><aside class="box stack"><h2>Margin note</h2><p>A related thought.</p></aside></div>
+    </div>`;
+    element.append(notes);
+  });
+
+  async function bounds() {
+    return page.locator(".reading-layout .with-sidebar").evaluate(element => {
+      const main = element.querySelector(".content-main").getBoundingClientRect();
+      const aside = element.querySelector(".content-asides").getBoundingClientRect();
+      const reading = element.closest(".reading-layout");
+      return {
+        main: { top: main.top, right: main.right, bottom: main.bottom },
+        aside: { top: aside.top, left: aside.left },
+        proseWidth: element.querySelector(".rich-content").getBoundingClientRect().width,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        readingWidth: reading.getBoundingClientRect().width,
+        readingMax: getComputedStyle(reading).maxInlineSize,
+        parentWidth: reading.parentElement.getBoundingClientRect().width,
+        mainMin: getComputedStyle(element.querySelector(".content-main")).minInlineSize,
+        sidebarBasis: getComputedStyle(element.querySelector(".content-asides")).flexBasis,
+        sidebarWidth: aside.width,
+      };
+    });
+  }
+  for (const width of [390, 800, 1280, 1920]) {
+    await page.setViewportSize({ width, height: 960 });
+    const layout = await bounds();
+    expect(layout.overflow).toBe(false);
+    expect(layout.proseWidth).toBeLessThanOrEqual(narrowWidth + 1);
+    if (width >= 1280) {
+      expect(layout.aside.top, JSON.stringify(layout)).toBeCloseTo(layout.main.top, 0);
+      expect(layout.aside.left).toBeGreaterThanOrEqual(layout.main.right);
+    } else {
+      expect(layout.aside.top).toBeGreaterThanOrEqual(layout.main.bottom);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await page.evaluate(() => { document.documentElement.style.fontSize = "250%"; });
+  const enlarged = await bounds();
+  expect(enlarged.overflow).toBe(false);
+  expect(enlarged.aside.top).toBeGreaterThanOrEqual(enlarged.main.bottom);
+});
+
+test("landing cover has the menu above its jumbotron and an edge-to-edge square footer", async ({ page }) => {
+  const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
+  const sources = Object.fromEntries(Object.entries(starterMetadata).filter(([key]) =>
+    key.startsWith("template_source/")).map(([key, value]) => [key.slice("template_source/".length), value]));
+  await page.route("**/assets/site.css", route => route.fulfill({
+    contentType: "text/css", body: Buffer.from(starterMetadata["asset_chunk/assets/site.css/0"], "base64"),
+  }));
+  await page.route("**/media/*", async route => {
+    const filename = new URL(route.request().url()).pathname.split("/").at(-1);
+    const media = starter.media.find(record => record.filename === filename);
+    if (!media) return route.abort();
+    return route.fulfill({ contentType: media.mimeType,
+      body: await readFile(new URL(`../../shared/starter-site/media/${filename}`, import.meta.url)) });
+  });
+  await page.goto("/generator.html");
+  await page.waitForFunction(() => typeof window.WebeasyGenerator?.compile === "function");
+  const compiled = await page.evaluate(({ starter, catalog, sources }) => {
+    const defaults = JSON.parse(window.WebeasyGenerator.templates(JSON.stringify(catalog))).sources;
+    const loaded = JSON.parse(window.WebeasyGenerator.loadTemplates(JSON.stringify({
+      project: starter, catalog, sources: { ...defaults, ...sources },
+    })));
+    if (loaded.error) return loaded;
+    return JSON.parse(window.WebeasyGenerator.compile(JSON.stringify({ project: starter, catalog: loaded.catalog })));
+  }, { starter, catalog, sources });
+  expect(compiled.error).toBeUndefined();
+  await page.route("**/layout-check.html", route => route.fulfill({
+    contentType: "text/html", body: compiled.files.find(file => file.path === "index.html").html,
+  }));
+  await page.goto("/layout-check.html");
+  await expect(page.locator(".jumbotron h1")).toHaveText(starter.pages[0].title);
+  await expect(page.locator(".jumbotron .secondary-title")).toHaveText(starter.pages[0].subtitle);
+  for (const width of [390, 1280, 1920]) {
+    await page.setViewportSize({ width, height: 960 });
+    const layout = await page.evaluate(() => {
+      const footer = document.querySelector("body > .site-footer");
+      const bounds = footer.getBoundingClientRect();
+      const cover = document.querySelector(".landing-cover").getBoundingClientRect();
+      const menu = document.querySelector(".landing-cover .site-header").getBoundingClientRect();
+      const title = document.querySelector(".jumbotron").getBoundingClientRect();
+      return { footerLeft: bounds.left, footerWidth: bounds.width, radius: getComputedStyle(footer).borderTopLeftRadius,
+        coverHeight: cover.height, menuBottom: menu.bottom, titleTop: title.top,
+        overflow: document.documentElement.scrollWidth > innerWidth };
+    });
+    expect(layout.footerLeft).toBeCloseTo(0, 0);
+    expect(layout.footerWidth).toBeCloseTo(width, 0);
+    expect(layout.radius).toBe("0px");
+    expect(layout.coverHeight).toBeGreaterThanOrEqual(960);
+    expect(layout.titleTop).toBeGreaterThanOrEqual(layout.menuBottom);
+    expect(layout.overflow).toBe(false);
+  }
+  await page.setViewportSize({ width: 1280, height: 960 });
+  await page.screenshot({ path: test.info().outputPath("landing-cover.png"), fullPage: true });
+});
+
+test("optional page author and secondary title survive saving and preview as text", async ({ page }) => {
+  await openEditor(page);
+  await page.getByLabel("Author (optional)", { exact: true }).fill("<Author & Co>");
+  await page.getByLabel("Secondary title (optional)", { exact: true }).fill("A secondary title");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].author)).toBe("<Author & Co>");
+  await expect.poll(() => page.evaluate(() => window.__savedProject.pages[0].subtitle)).toBe("A secondary title");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(page.locator("#preview .page-byline")).toContainText("<Author & Co>");
+  await expect(page.locator("#preview .secondary-title")).toHaveText("A secondary title");
+});
 
 test("native generator reports changes even when the current draft is incomplete", async ({ page }) => {
   await page.goto("/generator.html");

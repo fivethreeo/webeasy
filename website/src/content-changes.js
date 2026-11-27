@@ -1,5 +1,5 @@
 const fields = {
-  Page: { title: "Title", menuTitle: "Menu title", templateId: "Layout", slug: "Slug", date: "Date", coverMediaId: "Cover image", coverAlt: "Cover alternative text", content: "Content" },
+  Page: { title: "Title", subtitle: "Secondary title", author: "Author", menuTitle: "Menu title", templateId: "Layout", slug: "Slug", date: "Date", coverMediaId: "Cover image", coverAlt: "Cover alternative text", content: "Content" },
   News: { title: "Title", slug: "Slug", date: "Date", coverMediaId: "Cover image", coverAlt: "Cover alternative text", shortContent: "Short content", content: "Long content" },
   Section: { heading: "Heading", subheading: "Subheading", content: "Content" },
   Aside: { heading: "Heading", content: "Content" },

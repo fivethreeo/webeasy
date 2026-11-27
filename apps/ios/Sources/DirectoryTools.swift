@@ -183,7 +183,7 @@ enum DirectoryTools {
 
     static func readBackup(_ directory: URL) throws -> Backup {
         let manifest = try JSONDecoder().decode(Manifest.self, from: limited(directory.appendingPathComponent(markerName), maximum: 16 * 1024 * 1024))
-        guard manifest.format == "webeasy-backup", manifest.version == 1, manifest.schemaVersion == 4,
+        guard manifest.format == "webeasy-backup", manifest.version == 1, (4...5).contains(manifest.schemaVersion),
               manifest.id.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .regularExpression) != nil,
               date(manifest.createdAt) != nil, manifest.files["webeasy.sqlite"] != nil, manifest.files.count <= 100_000 else {
             throw ContentError.invalid("Unsupported or incomplete backup.")
@@ -231,7 +231,7 @@ enum DirectoryTools {
                     guard try fingerprint(output) == entries[path] else { throw ContentError.invalid("Backup write was incomplete.") }
                 }
                 guard entries["webeasy.sqlite"] != nil else { throw ContentError.invalid("Snapshot database is missing.") }
-                let manifest = Manifest(format: "webeasy-backup", version: 1, schemaVersion: 4,
+                let manifest = Manifest(format: "webeasy-backup", version: 1, schemaVersion: 5,
                     id: UUID().uuidString.lowercased(), createdAt: timestamp(now), files: entries)
                 let marker = target.appendingPathComponent(markerName)
                 created.append(marker)
