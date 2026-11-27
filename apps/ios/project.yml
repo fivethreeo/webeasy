@@ -48,7 +48,7 @@ targets:
           - "$(SRCROOT)/../../shared/renderer"
           - "$(SRCROOT)/../../shared/renderer/vendor/mustach"
           - "$(SRCROOT)/../../shared/renderer/vendor/cjson"
-        MARKETING_VERSION: "0.1.23"
+        MARKETING_VERSION: "0.1.24"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_USER_SCRIPT_SANDBOXING: NO
