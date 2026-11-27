@@ -90,8 +90,9 @@ test("landing cover has the menu above its jumbotron and an edge-to-edge square 
   const catalog = JSON.parse(await readFile(new URL("../dist/catalog.json", import.meta.url), "utf8"));
   const sources = Object.fromEntries(Object.entries(starterMetadata).filter(([key]) =>
     key.startsWith("template_source/")).map(([key, value]) => [key.slice("template_source/".length), value]));
+  let stylesheet = Buffer.from(starterMetadata["asset_chunk/assets/site.css/0"], "base64");
   await page.route("**/assets/site.css", route => route.fulfill({
-    contentType: "text/css", body: Buffer.from(starterMetadata["asset_chunk/assets/site.css/0"], "base64"),
+    contentType: "text/css", body: stylesheet,
   }));
   await page.route("**/media/*", async route => {
     const filename = new URL(route.request().url()).pathname.split("/").at(-1);
@@ -117,6 +118,34 @@ test("landing cover has the menu above its jumbotron and an edge-to-edge square 
   await page.goto("/layout-check.html");
   await expect(page.locator(".jumbotron h1")).toHaveText(starter.pages[0].title);
   await expect(page.locator(".jumbotron .secondary-title")).toHaveText(starter.pages[0].subtitle);
+  for (const css of [
+    await readFile(new URL("../dist/assets/site.css", import.meta.url)),
+    Buffer.from(starterMetadata["asset_chunk/assets/site.css/0"], "base64"),
+  ]) {
+    stylesheet = css;
+    await page.reload();
+    const rhythm = await page.evaluate(() => {
+      const gap = selector => parseFloat(getComputedStyle(document.querySelector(selector)).marginBlockStart);
+      const caption = getComputedStyle(document.querySelector("figcaption"));
+      return {
+        prose: gap(".landing-layout > .rich-content > p + p"),
+        subtitle: gap("section > header > p"),
+        section: gap(".landing-layout > section"),
+        sectionBody: gap("section > header + .with-sidebar"),
+        aside: gap(".content-asides .rich-content"),
+        footer: gap(".site-footer nav"),
+        caption: parseFloat(caption.marginBlockStart) + parseFloat(caption.paddingBlockStart),
+        hero: gap(".jumbotron > p"),
+      };
+    });
+    expect(rhythm.subtitle).toBeLessThan(rhythm.prose);
+    expect(rhythm.section).toBeGreaterThan(rhythm.prose);
+    expect(rhythm.sectionBody).toBeCloseTo(rhythm.prose, 1);
+    expect(rhythm.aside).toBeLessThan(rhythm.prose);
+    expect(rhythm.footer).toBeLessThan(rhythm.prose);
+    expect(rhythm.caption).toBeCloseTo(rhythm.subtitle, 1);
+    expect(rhythm.hero).toBeCloseTo(rhythm.prose, 1);
+  }
   for (const fontSize of ["125%", "250%"]) {
     await page.evaluate(size => { document.documentElement.style.fontSize = size; }, fontSize);
     for (const width of [320, 390, 1280, 1920]) {

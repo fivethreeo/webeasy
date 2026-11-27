@@ -125,8 +125,37 @@ body:has(.landing-cover) {
 }
 
 .rich-content {
+  --space: var(--s1);
   max-inline-size: 64ch;
   overflow-wrap: anywhere;
+}
+
+.content-blocks > header.stack + .with-sidebar {
+  --space: var(--s1);
+}
+
+:is(.content-blocks, .published-shell, .news-summary) > header.stack:not(.jumbotron) > * + * {
+  --space: var(--s-1);
+}
+
+.rich-content > h2 {
+  --space: var(--s2);
+}
+
+.rich-content > :is(h2, h3, h4, h5, h6) + * {
+  --space: var(--s-1);
+}
+
+figure.stack > figcaption {
+  --space: var(--s-1);
+  padding-block-start: 0;
+}
+
+.content-asides,
+.content-asides .rich-content,
+.news-summary > .rich-content,
+.site-footer .site-shell {
+  --space: var(--s0);
 }
 
 .rich-content > p:empty:last-child {
