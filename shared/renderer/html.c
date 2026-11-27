@@ -12,6 +12,11 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Rich HTML is parsed into a DOM (a tree of elements/text), not searched with
+ * regular expressions. Lexbor handles HTML5 parsing; utf8proc handles Unicode.
+ * We build allowed content, normalize its structure, then serialize it back.
+ * Node * values borrow nodes from the Lexbor document's allocation arena. */
+
 #define HTML_LIMIT (2u * 1024u * 1024u)
 #define OUTPUT_LIMIT (16u * 1024u * 1024u)
 #define VALUE_LIMIT (64u * 1024u)
@@ -25,6 +30,7 @@ struct dom {
     lxb_html_document_t *document;
     lxb_html_parser_t *parser;
     Node *root;
+    /* Function pointer saved before installing our safety-check callback. */
     lxb_html_tokenizer_token_f original_callback;
     void *original_context;
     size_t tokens;
@@ -63,6 +69,9 @@ static char *copy_bytes(const unsigned char *text, size_t length)
 
 static int valid_utf8(const unsigned char *text, size_t length)
 {
+    /* UTF-8 letters can use multiple bytes. utf8proc_iterate returns the number
+     * consumed and writes the decoded code point through &point; moving by one
+     * byte instead would split non-ASCII characters. */
     for (size_t offset = 0; offset < length;) {
         utf8proc_int32_t point;
         utf8proc_ssize_t size = utf8proc_iterate(text + offset,
@@ -240,6 +249,8 @@ static lxb_html_token_t *guard_token(lxb_html_tokenizer_t *tokenizer,
         tokenizer->status = LXB_STATUS_ABORTED;
         return NULL;
     }
+    /* After our bounds check, delegate to the original parser callback so it
+     * still constructs the DOM. A callback is a function supplied as a value. */
     return dom->original_callback(tokenizer, token, dom->original_context);
 }
 
@@ -262,6 +273,8 @@ static void destroy_dom(struct dom *dom)
 
 static int parse_dom(struct dom *dom, const char *html)
 {
+    /* Parse as content inside a div, not as a complete HTML document. The
+     * parser owns nodes until destroy_dom(); callers must not free Node *s. */
     memset(dom, 0, sizeof *dom);
     size_t length = bounded_length(html, HTML_LIMIT);
     if (!html || length > HTML_LIMIT || !valid_utf8((const unsigned char *)html, length))
@@ -323,6 +336,8 @@ static void move_before(Node *before, Node *child)
 
 static void move_children(Node *parent, Node *source)
 {
+    /* Moving the first child removes it from source's list. Re-read first_child
+     * each time instead of following links that the move has just changed. */
     while (source->first_child) move_child(parent, source->first_child);
 }
 
@@ -426,6 +441,9 @@ static int copy_attributes(Node *destination, Node *source)
 static int clean_children(struct dom *dom, Node *destination, Node *source,
                           int paragraphs_only, size_t depth)
 {
+    /* Read source and build a separate clean tree in destination. Unsupported
+     * harmless wrappers are flattened into their children; dangerous content
+     * is dropped by drop_content(). Only allow-listed attributes are copied. */
     if (depth > DEPTH_LIMIT) return 0;
     for (Node *child = source->first_child; child; child = child->next) {
         if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
@@ -662,6 +680,10 @@ static char *serialize(Node *root)
 
 char *webeasy_sanitize(const char *html, int paragraphs_only)
 {
+    /* Stages: parse -> copy safe nodes -> fix media/figures -> shape paragraphs
+     * -> serialize. Short news summaries use paragraphs_only, excluding media.
+     * &paragraph below lets helpers replace the caller's current Node *:
+     * that parameter is a Node **, a pointer to a pointer. */
     struct dom dom;
     if (!parse_dom(&dom, html)) return NULL;
     Node *clean = element(&dom, "div");
@@ -675,6 +697,8 @@ char *webeasy_sanitize(const char *html, int paragraphs_only)
         result = serialize(output);
     } else if (wrap_paragraphs(&dom, clean)) result = serialize(clean);
 done:
+    /* result is separately allocated text, not a pointer into the DOM, so it
+     * survives destroying the parser/document. The caller owns that string. */
     destroy_dom(&dom);
     return result;
 }
@@ -713,6 +737,9 @@ static int rewrite_home(Node *root, const char *home, int *changed)
 
 char *webeasy_rich(const char *sanitized_html, const char *home_href)
 {
+    /* Sanitization has already happened. Only home-link destinations change
+     * here; if nothing changed, return a copy of the original HTML bytes rather
+     * than serializing and unnecessarily changing its formatting. */
     if (!sanitized_html) return NULL;
     if (home_href && *home_href && strcmp(home_href, "./") &&
         webeasy_safe_href(home_href) != 1) return NULL;
@@ -745,6 +772,9 @@ static int array_valid(cJSON *array)
  * the caller's JSON. Keys borrow cJSON's strings and never outlive the call. */
 static size_t string_slot(struct strings *strings, const char *value)
 {
+    /* Hash a string into an array slot. A collision advances to the next slot
+     * until the same key or an empty slot is found ("linear probing").
+     * Capacity is a power of two, so & (capacity - 1) wraps the index around. */
     uint64_t hash = UINT64_C(14695981039346656037);
     for (const unsigned char *c = (const unsigned char *)value; *c; c++) {
         hash ^= *c;
@@ -774,6 +804,8 @@ char *webeasy_heading_id(const char *text, cJSON *used_ids)
     if (!text || length > HTML_LIMIT || !array_valid(used_ids) ||
         cJSON_GetArraySize(used_ids) >= (int)NODE_LIMIT) return NULL;
     utf8proc_uint8_t *normalized = NULL;
+    /* &normalized lets utf8proc_map write back the address of its new buffer.
+     * It allocates that buffer; every return path afterward must free it. */
     utf8proc_ssize_t size = utf8proc_map((const utf8proc_uint8_t *)text,
                     (utf8proc_ssize_t)length, &normalized, UTF8PROC_COMPAT | UTF8PROC_DECOMPOSE);
     if (size < 0) return NULL;
@@ -820,6 +852,9 @@ char *webeasy_heading_id(const char *text, cJSON *used_ids)
     free(strings.slots);
     char *result = copy_bytes((const unsigned char *)id, strlen(id));
     cJSON *item = result ? cJSON_CreateString(id) : NULL;
+    /* Two copies have different owners: used_ids owns its JSON string, while
+     * the caller owns result and must free it. Freeing result does not erase
+     * the ID from the collision-checking array. */
     if (!item || !cJSON_AddItemToArray(used_ids, item)) {
         free(result);
         cJSON_Delete(item);

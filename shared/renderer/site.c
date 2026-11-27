@@ -8,24 +8,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Reading guide: the public webeasy_* functions at the bottom call operation().
+ * It validates a project with normalize(), builds template data with prepare(),
+ * and optionally asks renderer.c for HTML. html.c handles rich-text safety.
+ * A "static" function is private to this C file; it is not an exported API. */
+
 #define SITE_LIMIT (64u * 1024u * 1024u)
 #define TREE_DEPTH 64
 
 /* One operation owns all of its state. There are no shared mutable globals, so
- * Android worker threads and Swift detached tasks can generate independently. */
+ * Android worker threads and Swift detached tasks can generate independently.
+ * Helpers receive a struct site *: a pointer to this state, not a copied struct.
+ * site->error therefore accesses the error field in the caller's same state. */
 struct site {
     char error[256];
     cJSON *ids;
     cJSON *project;
     cJSON *partials;
-    const cJSON *catalog;
+    const cJSON *catalog; /* Borrowed from input; do not delete separately. */
     cJSON *routes;
     cJSON *documents;
     char *home_href;
-    const cJSON *home;
+    const cJSON *home; /* Borrowed nodes inside the owned routes tree. */
     const cJSON *home_entry;
 };
 
+/* error is a fixed-size char array. Its first byte is '\0' until a failure;
+ * keep the first message so later cleanup does not hide the original cause. */
 static void fail(struct site *site, const char *message)
 {
     if (!*site->error) snprintf(site->error, sizeof site->error, "%s", message);
@@ -57,7 +66,9 @@ static cJSON *array(struct site *site)
 }
 
 /* These helpers take ownership even on failure. That makes the many JSON tree
- * transformations below readable without leaking detached values on errors. */
+ * transformations below readable without leaking detached values on errors.
+ * After set()/push(), the parent owns value: deleting the parent also deletes
+ * that child. The caller must not delete the child a second time. */
 static void set(struct site *site, cJSON *parent, const char *key, cJSON *value)
 {
     if (!value || !parent) {
@@ -80,6 +91,8 @@ static void push(struct site *site, cJSON *parent, cJSON *value)
     }
 }
 
+/* get() returns a borrowed pointer into an existing tree. To put that data in
+ * another tree, duplicate it: cJSON_Duplicate(..., 1) also copies descendants. */
 static cJSON *copy(struct site *site, const cJSON *value)
 {
     cJSON *result = value ? cJSON_Duplicate(value, 1) : NULL;
@@ -141,6 +154,8 @@ static char *trim(struct site *site, const char *value)
     return result;
 }
 
+/* The returned const char * borrows the record's string; callers do not free it.
+ * The separately allocated trimmed copy is only used to check for blank text. */
 static const char *required_text(struct site *site, const cJSON *record, const char *key, int required)
 {
     const cJSON *value = get(record, key);
@@ -386,6 +401,9 @@ static void check_covers(struct site *site, const cJSON *records, int depth)
 /* Normalize into a fresh, deliberately restricted schema. Editor-only fields
  * never leak into SQLite snapshots or templates. IDs are unique across every
  * kind of record, while page slugs are unique only among their siblings. */
+/* Rebuild a clean project rather than editing the parsed input. This centralizes
+ * validation for save and publish alike: IDs, routes, media and sanitized HTML
+ * must be consistent before any template sees them. No files are written here. */
 static cJSON *normalize(struct site *site, const cJSON *input)
 {
     cJSON *project = object(site);
@@ -466,7 +484,9 @@ static cJSON *normalize(struct site *site, const cJSON *input)
 }
 
 /* Build routing and render contexts separately from rendering. Templates remain
- * editable data: C decides which values they receive, not their HTML layout. */
+ * editable data: C decides which values they receive, not their HTML layout.
+ * Recursion follows page children: "about" then "team" becomes /about/team/.
+ * Each child gets its own ancestor copy, keeping sibling breadcrumbs separate. */
 static void routes(struct site *site, const cJSON *records, const char *prefix, const cJSON *ancestors, int depth)
 {
     if (depth > TREE_DEPTH || *site->error) return;
@@ -507,6 +527,9 @@ static cJSON *page_link(struct site *site, const cJSON *page)
     return link;
 }
 
+/* This is a deferred rendering instruction, not HTML yet. For example,
+ * {"$render":"rich-content","values":{"html":"<p>Hello</p>"}} tells renderer.c
+ * which template to render later. set() transfers ownership of values. */
 static cJSON *compose(struct site *site, const char *template, cJSON *values)
 {
     cJSON *output = object(site);
@@ -709,6 +732,9 @@ static void document(struct site *site, const char *title, cJSON *content, const
     text(site, values, "title", title);
     size_t depth = 0;
     for (const char *p = path; *p; p++) if (*p == '/') depth++;
+    /* Files share root-level assets. news/date/slug/index.html needs "../../../"
+     * as its base, while root index.html needs "./". The extra byte holds '\0',
+     * the terminator C uses to mark the end of every string. */
     char *base = malloc(depth ? depth * 3 + 1 : 3);
     if (!base) fail(site, "Out of memory.");
     else {
@@ -728,6 +754,9 @@ static void document(struct site *site, const char *title, cJSON *content, const
 
 static int news_compare(const void *a, const void *b)
 {
+    /* qsort passes addresses of array entries, not the records themselves.
+     * Entries are cJSON pointers, so cast to pointer-to-pointer and dereference
+     * once to get each record. Reversed date comparison puts newest news first. */
     const cJSON *first = *(const cJSON *const *)a, *second = *(const cJSON *const *)b;
     int comparison = strcmp(string(second, "date"), string(first, "date"));
     return comparison ? comparison : strcmp(string(first, "slug"), string(second, "slug"));
@@ -760,6 +789,9 @@ static char *public_prefix(struct site *site, const cJSON *input)
     return result;
 }
 
+/* Turn validated records into a render request: template sources, document
+ * paths and the values each template receives. Templates/components become
+ * named partials; pages and news become documents; master wraps each document. */
 static cJSON *prepare(struct site *site, const cJSON *input)
 {
     site->catalog = get(input, "catalog");
@@ -796,6 +828,9 @@ static cJSON *prepare(struct site *site, const cJSON *input)
         free(file);
     }
     int count = cJSON_GetArraySize(get(site->project, "news"));
+    /* Allocate an array of pointers, not copies of all the news records.
+     * sizeof *sorted is the size of one pointer. Sorting this temporary array
+     * leaves the saved project's news order unchanged. */
     const cJSON **sorted = count ? malloc((size_t)count * sizeof *sorted) : NULL;
     if (count && !sorted) fail(site, "Out of memory.");
     if (sorted) {
@@ -851,6 +886,9 @@ static cJSON *prepare(struct site *site, const cJSON *input)
     return request;
 }
 
+/* Walk normalized content, not every managed media file. Publishing needs only
+ * images/videos actually referenced by rich text or covers. paths is the shared
+ * result array passed through recursion, so repeated references appear once. */
 static void referenced_media(struct site *site, const cJSON *record, cJSON *paths, int depth)
 {
     if (*site->error) return;
@@ -887,8 +925,17 @@ static int nul_escape(const char *request)
     return 0;
 }
 
+/* All three public APIs share this lifetime:
+ *   0: project JSON -> normalized project
+ *   1: {project,catalog,...} -> normalized project + deferred render request
+ *   2: {project,catalog,...} -> normalized project + rendered HTML files
+ * The returned JSON string is heap memory; the caller releases it with
+ * webeasy_free(). Temporary JSON trees stay here and are always cleaned up. */
 static char *operation(const char *request, int compile)
 {
+    /* {0} initializes the entire struct: NULL pointers and an empty error.
+     * Here site is a struct value, so use site.error; &site passes its address
+     * to helpers, which use site->error through their pointer parameter. */
     struct site site = {0};
     cJSON *input = NULL, *output = NULL;
     if (!request || strlen(request) > SITE_LIMIT) fail(&site, "Content request is missing or too large.");
@@ -902,6 +949,9 @@ static char *operation(const char *request, int compile)
     if (compile && !*site.error) {
         cJSON *render_request = prepare(&site, input);
         if (compile == 2 && !*site.error) {
+            /* renderer.c accepts/returns JSON text, just like the native bridge.
+             * Printing allocates a string; parsing creates an independent tree.
+             * Copy the files out before freeing both temporary representations. */
             char *serialized = cJSON_PrintUnformatted(render_request);
             char *rendered = serialized ? webeasy_render(serialized) : NULL;
             cJSON *result = rendered ? cJSON_ParseWithOpts(rendered, NULL, 1) : NULL;
@@ -920,11 +970,15 @@ static char *operation(const char *request, int compile)
         set(&site, output, "referencedMedia", paths);
     }
     if (*site.error) {
+        /* Never return partially generated files as if generation succeeded. */
         cJSON_Delete(output);
         output = cJSON_CreateObject();
         if (output) cJSON_AddStringToObject(output, "error", site.error);
     }
     char *result = output ? cJSON_PrintUnformatted(output) : NULL;
+    /* Serialization copied the output into result, so deleting these trees
+     * cannot invalidate it. free(NULL) is safe on paths that failed early.
+     * If even serialization cannot allocate memory, result is NULL. */
     cJSON_Delete(input); cJSON_Delete(output); cJSON_Delete(site.ids);
     cJSON_Delete(site.project); cJSON_Delete(site.partials); cJSON_Delete(site.routes); cJSON_Delete(site.documents);
     free(site.home_href);

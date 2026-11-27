@@ -6,6 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* This file is the final template engine, not the project validator. site.c
+ * supplies {"partials":...,"documents":...,"rawSlots":...}. Each document names
+ * a template and its JSON values; we return {"files":[{"path":...,"html":...}]}.
+ * Mustach reads template syntax and calls our functions to obtain those values. */
+
 #define MAX_OUTPUT (16u * 1024u * 1024u)
 #define MAX_REQUEST (64u * 1024u * 1024u)
 #define MAX_COMPOSITION 64
@@ -21,6 +26,8 @@ struct renderer {
 
 struct context {
     struct renderer *renderer;
+    /* This is an array of borrowed JSON pointers, one per nested section.
+     * It is a scope stack, not another copy of the project. */
     const cJSON *values[MUSTACH_MAX_DEPTH + 1];
     int array[MUSTACH_MAX_DEPTH + 1];
     int depth;
@@ -30,7 +37,7 @@ struct context {
     size_t capacity;
 };
 
-/* Keep the first rendering failure in the request-local state; negative user
+/* Record a rendering failure in the request-local state; negative user
  * error codes stop Mustach, while the public API returns a readable JSON error. */
 static int fail(struct renderer *renderer, const char *message, const char *name)
 {
@@ -48,6 +55,8 @@ static int append(struct context *context, const char *text, size_t size)
     if (needed > context->capacity) {
         size_t capacity = context->capacity ? context->capacity : 1024;
         while (capacity < needed) capacity *= 2;
+        /* realloc may move the allocation. Keep its return value temporarily:
+         * if it fails, the old context->output still exists and can be freed. */
         char *output = realloc(context->output, capacity);
         if (!output) return fail(context->renderer, "Out of memory.", NULL);
         context->output = output;
@@ -62,6 +71,9 @@ static int append(struct context *context, const char *text, size_t size)
 static int emit(void *closure, const char *text, size_t size, int escape, FILE *file)
 {
     (void)file;
+    /* Mustach passes our context back as an untyped void * ("closure").
+     * Assigning it to struct context * restores the type; no struct is copied.
+     * (void)file above deliberately ignores its unused FILE * argument. */
     struct context *context = closure;
     /* Normal {{fields}} escape HTML metacharacters. Triple-brace fields are
      * allowed separately by put(), only for the trusted composition slots. */
@@ -211,6 +223,8 @@ static char *render(struct renderer *renderer, const char *name, const cJSON *va
     const struct mustach_itf interface = {
         .put = put, .enter = enter, .next = next, .leave = leave, .partial = partial, .emit = emit,
     };
+    /* .put = put stores a function pointer, not the result of calling put().
+     * Passing &context lets every callback access this render's same state. */
     int status = mustach_file(source->valuestring, 0, &interface, &context, Mustach_With_NoExtensions, NULL);
     if (status) {
         if (!*renderer->error)
@@ -234,6 +248,8 @@ static int expand(struct renderer *renderer, cJSON *parent, int depth)
     if (depth > MAX_COMPOSITION) return fail(renderer, "Template composition is too deep.", NULL);
     cJSON *value = parent->child;
     while (value) {
+        /* Replacing a cJSON node deletes the old node. Save its next sibling
+         * first, otherwise value->next would read freed memory afterward. */
         cJSON *following = value->next;
         if (cJSON_IsObject(value) || cJSON_IsArray(value)) {
             if (expand(renderer, value, depth + 1)) return -1;
@@ -245,6 +261,8 @@ static int expand(struct renderer *renderer, cJSON *parent, int depth)
                 char *html = render(renderer, name->valuestring, data);
                 if (!html) return -1;
                 cJSON *replacement = cJSON_CreateString(html);
+                /* cJSON_CreateString copied html; the temporary render buffer
+                 * can now be freed without invalidating the replacement. */
                 free(html);
                 int replaced = replacement && (cJSON_IsObject(parent)
                     ? cJSON_ReplaceItemInObjectCaseSensitive(parent, value->string, replacement)
@@ -303,12 +321,16 @@ char *webeasy_render(const char *request)
         free(html);
     }
     cJSON_AddItemToObject(output, "files", files);
+    /* Ownership moved into output. Clear this local pointer so cleanup below
+     * does not delete the same array separately and then again via output. */
     files = NULL;
     goto cleanup;
 error:
     cJSON_AddStringToObject(output, "error", *renderer.error ? renderer.error : "Cannot render website.");
 cleanup:
     ;
+    /* goto is used only to converge on cleanup, not to loop. The standalone
+     * semicolon gives this label a statement before the declaration below. */
     /* All intermediate trees are released here, including partial failures.
      * Only the serialized result crosses the Swift/JNI/WASM boundary. */
     char *result = output ? cJSON_PrintUnformatted(output) : NULL;
@@ -320,5 +342,7 @@ cleanup:
 
 void webeasy_free(void *memory)
 {
+    /* Foreign callers must return our allocation to the same C allocator.
+     * Swift/JNI/WASM strings are separate copies with their own lifetimes. */
     free(memory);
 }
