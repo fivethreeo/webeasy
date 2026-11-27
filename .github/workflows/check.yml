@@ -78,6 +78,24 @@ jobs:
           mkdir -p dist/native-renderer-tests
           swiftc -swift-version 6 -import-objc-header apps/ios/Sources/Webeasy-Bridging-Header.h apps/ios/Sources/ContentError.swift apps/ios/Sources/NativeRenderer.swift apps/ios/Tests/NativeRendererTests.swift dist/renderer/native-lib/libwebeasy.a -o dist/native-renderer-tests/swift-tests
           dist/native-renderer-tests/swift-tests
+      - name: Test directory and backup paths on iOS
+        run: |
+          device=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(device["udid"] for runtime, entries in devices.items()
+                     if ".iOS-" in runtime for device in entries if device["isAvailable"]))
+          ')
+          xcrun simctl boot "$device"
+          trap 'xcrun simctl shutdown "$device"' EXIT
+          xcrun simctl bootstatus "$device" -b
+          xcrun --sdk iphonesimulator swiftc -swift-version 6 \
+            -target "$(uname -m)-apple-ios17.0-simulator" \
+            -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            apps/ios/Sources/ContentError.swift apps/ios/Sources/CustomizationAssets.swift \
+            apps/ios/Sources/DirectoryTools.swift apps/ios/Sources/HostingDirectory.swift \
+            apps/ios/Tests/DirectoryToolsTests.swift -o "$RUNNER_TEMP/webeasy-directory-ios-tests"
+          xcrun simctl spawn "$device" "$RUNNER_TEMP/webeasy-directory-ios-tests"
       - run: brew install xcodegen
       - run: xcodegen generate
         working-directory: apps/ios
