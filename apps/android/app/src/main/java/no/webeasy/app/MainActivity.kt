@@ -708,7 +708,7 @@ class MainActivity : ComponentActivity() {
                     Button(onClick = ::loadServerTemplates, enabled = ready && !busy && project != null && hostingServer != null && !publishingSettingsChanged()) {
                         Text("Load templates from server")
                     }
-                    Text("Export templates and assets explicitly from Advanced settings. Upload the webeasy_templates folder to your hosting to load its edited HTML here.")
+                    Text("Export templates and assets explicitly to hosting from Advanced settings, then load the edited HTML here.")
                     if (busy) CircularProgressIndicator()
                 }
             }

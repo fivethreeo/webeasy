@@ -576,12 +576,12 @@ final class NativeEditorModel: NSObject, ObservableObject, WKNavigationDelegate 
             defer { busy = false }
             do {
                 let destination = try hostingDestination(backup: true)
-                let snapshot = try await SitePublisher.withDirectory(destination) {
+                let restoredSnapshot = try await SitePublisher.withDirectory(destination) {
                     try await HostingTools.restoreSnapshot($0, backup: backup)
                 }
-                defer { try? FileManager.default.removeItem(at: snapshot) }
+                defer { try? FileManager.default.removeItem(at: restoredSnapshot) }
                 let (data, catalogData, published) = try await Task.detached {
-                    try store.restoreSnapshot(snapshot)
+                    try store.restoreSnapshot(restoredSnapshot)
                     return (try JSONSerialization.data(withJSONObject: store.project()),
                             try Catalog.data(sources: store.templateSources()), try store.publishedSnapshot())
                 }.value
